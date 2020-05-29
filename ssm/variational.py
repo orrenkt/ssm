@@ -8,7 +8,7 @@ from ssm.util import ensure_variational_args_are_lists, trace_product
 
 from autograd.scipy.special import logsumexp
 from warnings import warn
-
+from tqdm import tqdm
 
 class VariationalPosterior(object):
     """
@@ -275,7 +275,7 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
         self._continuous_expectations = None
         self.continuous_state_params = \
             [self._initialize_continuous_state_params(data, input, mask, tag)
-             for data, input, mask, tag in zip(datas, inputs, masks, tags)]
+             for data, input, mask, tag in tqdm(zip(datas, inputs, masks, tags))]
 
     # Parameters
     @property
@@ -342,8 +342,14 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
 
         # Set the posterior mean based on the emission model, if possible.
         if self.model.emissions.single_subspace and self.model.emissions.N >= D:
-            h_obs = (1.0 / self.initial_variance) * self.model.emissions. \
-                invert(data, input=input, mask=mask, tag=tag)
+            # h_obs = (1.0 / self.initial_variance) * self.model.emissions. \
+                # invert(data, input=input, mask=mask, tag=tag)
+
+            # run particle filter
+            # import ipdb; ipdb.set_trace()
+            particles, weights = self.model.smc(data, input, mask, tag, N_particles=25)
+            h_obs = (1.0 / self.initial_variance) * np.mean(particles[0,:,:,:],axis=0)
+            
         else:
             warn("We can only initialize the continuous states if the emissions lie in a "
                  "single subspace and are of higher dimension than the latent states."

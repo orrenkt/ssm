@@ -12,6 +12,8 @@ from ssm.primitives import hmm_normalizer
 from ssm.messages import hmm_expected_states, viterbi
 from ssm.util import ensure_args_are_lists, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists
+from ssm.util import LOG_EPS, DIV_EPS
+from autograd.scipy.special import logsumexp
 
 import ssm.observations as obs
 import ssm.transitions as trans
@@ -784,6 +786,214 @@ class SLDS(object):
         posterior = self._make_variational_posterior(variational_posterior, datas, inputs, masks, tags, method)
         elbos = _fitting_methods[method](posterior, datas, inputs, masks, tags, learning=False, **kwargs)
         return elbos, posterior
+
+    def smc_step(self, particles, posteriors, weights, data, input, mask, tag):
+        # particles is (N particles, t-1 time steps, D dimensions)
+        # posteriors is (N particles, K states)
+        # weights is (N particles,)
+
+        N, t, D = np.shape(particles)
+        new_particles = []
+        new_posteriors = []
+        likelihoods = []
+        for (particle, posterior, weight) in zip(particles, posteriors, weights):
+
+            if t == 0:
+
+                # if t = 0 sample particles from the prior
+                pi0 = self.init_state_distn.initial_state_distn
+                zt_particle = npr.choice(self.K, p=pi0)
+                xt_particle = self.dynamics.sample_x(zt_particle, np.zeros((0,D)),
+                                                    input=input[t], tag=tag,
+                                                    with_noise=True).reshape((1,D))
+
+            else:
+
+                # now compute "look-ahead" posterior
+                # p(z_t | x_{1:t-1}^n) = \sum_{z_{t-1}} p(z_t | x_{t-1}, z_{t-1}) p(z_{t-1} | x_{1:t-1})
+                x_mask = np.ones_like(particle[-1:], dtype=bool)
+                Ps = self.transitions.transition_matrix(particle[-1:], input[t:t+1], x_mask, tag) # check input
+                pz_t = np.dot(posterior, Ps[-1])
+
+                # Sample from p(z_t | x_{1:t-1}^n)
+                zt_particle = npr.choice(self.K, p=pz_t)
+
+                # 2. sample continuous state x_t^n | x_{t-1}^n, z_t^n
+                xt_particle = self.dynamics.sample_x(zt_particle, particle[-1:],
+                                                    input=input[t], tag=tag,
+                                                    with_noise=True).reshape((1,D))
+
+            # particle.append(xt_particle) # append sampled x to particle trajectory
+            new_particles.append(xt_particle)
+
+            # 4. evaluate likelihood p(y_t | x_t^n) for each particle
+            likelihood = self.emissions.log_likelihoods(data[t:t+1], input[t:t+1], mask[t:t+1], tag, xt_particle)
+            likelihoods.append(np.sum(likelihood))
+
+            # 3. update posterior p(z_t | x_{1:t}^n) for each particle - using alpha recursion
+            if t > 0:
+
+                # get transition matrix and likelihood for recursion
+                current_particle = np.append(particle, xt_particle, axis=0)
+                x_mask = np.ones_like(xt_particle, dtype=bool)
+                Ps = self.transitions.transition_matrix(xt_particle, input[t:t+1], x_mask, tag) # recurrent transitions, check input
+                log_likes = self.dynamics.log_likelihoods(current_particle[-2:], input[t-1:t+1], x_mask, tag)
+
+                # alpha recursion
+                # alpha(z_t) = p(x_t | z_t) \sum_{z_{t-1}} \alpha(z_{t-1}) p(z_t | z_{t-1}, x_{t-1})
+                # m = np.max(posterior)
+                # new_posterior = np.log(np.dot(np.exp(posterior - m), Ps[-1]) + LOG_EPS) + m + log_likes[-1]
+                log_posterior = np.log(posterior)
+                m = np.max(log_posterior)
+                new_log_posterior = np.log(np.dot(np.exp(log_posterior - m), Ps[-1]) + LOG_EPS) + m + log_likes[-1]
+                new_posterior = np.exp(new_log_posterior - logsumexp(new_log_posterior))
+
+
+            else:
+
+                # initialize alpha recursion
+                x_mask = np.ones_like(xt_particle, dtype=bool)
+                log_likes = self.dynamics.log_likelihoods(xt_particle, input[:1], x_mask, tag)
+                # new_posterior = np.log(pi0 + LOG_EPS) + log_likes[0]
+                new_log_posterior = np.log(pi0 + LOG_EPS) + log_likes[0]
+                new_posterior = np.exp(new_log_posterior - logsumexp(new_log_posterior))
+
+            new_posteriors.append(new_posterior)
+
+        # 5. update weights (should just involve likelihoods)
+        # w_t^s \propto w_{t-1}^s p(y_t | x_t^s)
+        # weights = np.multiply(weights, np.exp(np.array(likelihoods))) + DIV_EPS / N
+        # weights /= np.sum(weights)
+        log_weights = np.log(weights) + np.array(likelihoods)
+        weights = np.exp(log_weights - logsumexp(log_weights))
+
+        # 6. resample particles according to their normalized weights
+        # perform resampling on particles, posteriors, and histories
+        indices = npr.choice(N, (N,), replace=True, p=weights)
+        particles = np.append(particles, new_particles, axis=1) # append new particles
+        resampled_particles = np.array([particles[idx] for idx in indices]) # resample particles & histories
+        resampled_posteriors = [new_posteriors[idx] for idx in indices]
+        weights = (1.0 / N) * np.ones((N,))
+
+        return resampled_particles, resampled_posteriors, weights
+
+    # def smc_step2(self, particles, posteriors, weights, data, input, mask, tag):
+    #     # particles is (N particles, t-1 time steps, D dimensions)
+    #     # posteriors is (N particles, K states)
+    #     # weights is (N particles,)
+
+    #     N, t, D = np.shape(particles)
+    #     new_particles = []
+    #     new_posteriors = []
+    #     likelihoods = []
+    #     # for (particle, posterior, weight) in zip(particles, posteriors, weights):
+
+    #     if t == 0:
+
+    #         # if t = 0 sample particles from the prior
+    #         pi0 = self.init_state_distn.initial_state_distn
+    #         zt_particles = npr.choice(self.K, p=pi0, size=(N,))
+    #         xt_particles = np.array([self.dynamics.sample_x(zt_particle, np.zeros((0,D)), input=input[t], tag=tag,
+    #                             with_noise=True).reshape((1,D)) for zt_particle in zt_particles])
+
+    #     else:
+
+    #         # now compute "look-ahead" posterior
+    #         # p(z_t | x_{1:t-1}^n) = \sum_{z_{t-1}} p(z_t | x_{t-1}, z_{t-1}) p(z_{t-1} | x_{1:t-1})
+    #         x_mask = np.ones_like(particles[0][-1:], dtype=bool)
+    #         Ps = [self.transitions.transition_matrix(particle[-1:], input[t:t+1], x_mask, tag)
+    #                 for particle in particles] # check input
+
+    #         # Sample from p(z_t | x_{1:t-1}^n)
+    #         zt_particles = np.array([npr.choice(self.K, p=np.dot(posterior, P[-1])) 
+    #                                     for posterior, P in zip(posteriors, Ps)])
+
+    #         # 2. sample continuous state x_t^n | x_{t-1}^n, z_t^n
+    #         xt_particles = np.array([self.dynamics.sample_x(zt_particle, particle[-1:], input=input[t], 
+    #                                 tag=tag, with_noise=True).reshape((1,D)) 
+    #                                 for zt_particle, particle in zip(zt_particles, particles)])
+
+    #     # particle.append(xt_particle) # append sampled x to particle trajectory
+    #     new_particles = np.array(xt_particles)
+
+    #     # 4. evaluate likelihood p(y_t | x_t^n) for each particle
+    #     likelihoods = [np.sum(self.emissions.log_likelihoods(data[t:t+1], input[t:t+1], mask[t:t+1], tag, xt_particle))
+    #                     for xt_particle in xt_particles]
+
+    #     # 3. update posterior p(z_t | x_{1:t}^n) for each particle - using alpha recursion
+    #     if t > 0:
+
+    #         # get transition matrix and likelihood for recursion
+    #         current_particles = [np.append(particle, xt_particle, axis=0) for particle, xt_particle in zip(particles, xt_particles)]
+    #         x_mask = np.ones_like(xt_particles[0], dtype=bool)
+    #         Ps = [self.transitions.transition_matrix(xt_particle, input[t:t+1], x_mask, tag) for xt_particle in xt_particles] # recurrent transitions, check input
+    #         log_likes = [self.dynamics.log_likelihoods(current_particle[-2:], input[t-1:t+1], x_mask, tag) 
+    #                         for current_particle in current_particles]
+
+    #         # alpha recursion
+    #         # alpha(z_t) = p(x_t | z_t) \sum_{z_{t-1}} \alpha(z_{t-1}) p(z_t | z_{t-1}, x_{t-1})
+    #         # m = np.max(posterior)
+    #         # new_posterior = np.log(np.dot(np.exp(posterior - m), Ps[-1]) + LOG_EPS) + m + log_likes[-1]
+    #         ms = [np.max(np.log(posterior)) for posterior in posteriors]
+    #         new_log_posteriors = [np.log(np.dot(np.exp(np.log(posterior) - m), P[-1]) + LOG_EPS) + m + log_like[-1]
+    #                                 for posterior, m, P, log_like in zip(posteriors, ms, Ps, log_likes)]
+    #         new_posteriors = [np.exp(new_log_posterior - logsumexp(new_log_posterior)) for new_log_posterior in new_log_posteriors]
+
+
+    #     else:
+
+    #         # initialize alpha recursion
+    #         x_mask = np.ones_like(xt_particles[0], dtype=bool)
+    #         log_likes = [self.dynamics.log_likelihoods(xt_particle, input[:1], x_mask, tag) for xt_particle in xt_particles]
+    #         # new_posterior = np.log(pi0 + LOG_EPS) + log_likes[0]
+    #         new_log_posteriors = [np.log(pi0 + LOG_EPS) + log_like[0] for log_like in log_likes]
+    #         new_posteriors = [np.exp(new_log_posterior - logsumexp(new_log_posterior)) for new_log_posterior in new_log_posteriors]
+
+    #     # 5. update weights (should just involve likelihoods)
+    #     # w_t^s \propto w_{t-1}^s p(y_t | x_t^s)
+    #     # weights = np.multiply(weights, np.exp(np.array(likelihoods))) + DIV_EPS / N
+    #     # weights /= np.sum(weights)
+    #     log_weights = np.log(weights) + np.array(likelihoods)
+    #     weights = np.exp(log_weights - logsumexp(log_weights))
+
+    #     # 6. resample particles according to their normalized weights
+    #     # perform resampling on particles, posteriors, and histories
+    #     indices = npr.choice(N, (N,), replace=True, p=weights)
+    #     particles = np.append(particles, new_particles, axis=1) # append new particles
+    #     resampled_particles = np.array([particles[idx] for idx in indices]) # resample particles & histories
+    #     resampled_posteriors = [new_posteriors[idx] for idx in indices]
+    #     weights = (1.0 / N) * np.ones((N,))
+
+    #     return resampled_particles, resampled_posteriors, weights
+
+    @ensure_args_are_lists
+    def smc(self, datas, inputs=None, masks=None, tags=None, N_particles=100):
+        # runs SMC for each time series
+
+        all_particles = []
+        all_weights = []
+        for data, input, mask, tag in zip(datas, inputs, masks, tags):
+
+            T = data.shape[0]
+
+            # setup: define particles, posteriors, weights
+            posteriors = np.empty((N_particles, self.K))
+            particles = np.empty((N_particles, 0, self.D))
+
+            # initial weights
+            weights = (1.0 / N_particles) * np.ones((N_particles,))
+
+            # rest of time
+            for t in range(T):
+                particles, posteriors, weights = self.smc_step(particles, posteriors,
+                                                          weights, data, input,
+                                                          mask, tag)
+
+
+            all_particles.append(particles)
+            all_weights.append(weights)
+
+        return np.array(all_particles), all_weights
 
 
 class LDS(SLDS):

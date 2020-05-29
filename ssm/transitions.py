@@ -293,6 +293,15 @@ class RecurrentTransitions(InputDrivenTransitions):
         log_Ps = log_Ps + np.dot(data[:-1], self.Rs.T)[:, None, :]
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
+    def transition_matrix(self, data, input, mask, tag):
+        # For a single data point: data is x_{t-1}, input is x_t
+        log_Ps = self.log_Ps[None, :, :]
+        # Input effect
+        log_Ps = log_Ps + np.dot(input, self.Ws.T)[:, None, :]
+        # Past observations effect
+        log_Ps = log_Ps + np.dot(data, self.Rs.T)[:, None, :]
+        return np.exp(log_Ps - logsumexp(log_Ps, axis=2, keepdims=True))
+        
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
         Transitions.m_step(self, expectations, datas, inputs, masks, tags, **kwargs)
 

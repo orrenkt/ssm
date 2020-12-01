@@ -35,8 +35,30 @@ class Observations(object):
         pass
 
     @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        pass
+    def initialize(self, datas, inputs=None, masks=None, tags=None, init_method="random"):
+        Ts = [data.shape[0] for data in datas]
+
+        # Get initial discrete states
+        if init_method.lower() == 'kmeans':
+            # KMeans clustering
+            from sklearn.cluster import KMeans
+            km = KMeans(self.K)
+            km.fit(np.vstack(datas))
+            zs = np.split(km.labels_, np.cumsum(Ts)[:-1])
+
+        elif init_method.lower() =='random':
+            # Random assignment
+            zs = [npr.choice(self.K, size=T) for T in Ts]
+
+        else:
+            raise Exception('Not an accepted initialization type: {}'.format(init_method))
+
+        # Make a one-hot encoding of z and treat it as HMM expectations
+        Ezs = [one_hot(z, self.K) for z in zs]
+        expectations = [(Ez, None, None) for Ez in Ezs]
+
+        # Set the variances all at once to use the setter
+        self.m_step(expectations, datas, inputs, masks, tags)
 
     def log_prior(self):
         return 0
@@ -76,9 +98,6 @@ class Observations(object):
         raise NotImplementedError
 
     def neg_hessian_expected_log_dynamics_prob(self, Ez, data, input, mask, tag=None):
-        # warnings.warn("Analytical Hessian is not implemented for this dynamics class. \
-        #                Optimization via Laplace-EM may be slow. Consider using an \
-        #                alternative posterior and inference method. ")
         raise NotImplementedError
 
 
@@ -103,18 +122,6 @@ class GaussianObservations(Observations):
     @property
     def Sigmas(self):
         return np.matmul(self._sqrt_Sigmas, np.swapaxes(self._sqrt_Sigmas, -1, -2))
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # Initialize with KMeans
-        from sklearn.cluster import KMeans
-        data = np.concatenate(datas)
-        km = KMeans(self.K).fit(data)
-        self.mus = km.cluster_centers_
-        Sigmas = np.array([np.atleast_2d(np.cov(data[km.labels_ == k].T))
-                           for k in range(self.K)])
-        assert np.all(np.isfinite(Sigmas))
-        self._sqrt_Sigmas = np.linalg.cholesky(Sigmas + 1e-8 * np.eye(self.D))
 
     def log_likelihoods(self, data, input, mask, tag):
         mus, Sigmas = self.mus, self.Sigmas
@@ -175,14 +182,6 @@ class ExponentialObservations(Observations):
     def permute(self, perm):
         self.log_lambdas = self.log_lambdas[perm]
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # Initialize with KMeans
-        from sklearn.cluster import KMeans
-        data = np.concatenate(datas)
-        km = KMeans(self.K).fit(data)
-        self.log_lambdas = -np.log(km.cluster_centers_ + 1e-3)
-
     def log_likelihoods(self, data, input, mask, tag):
         lambdas = np.exp(self.log_lambdas)
         mask = np.ones_like(data, dtype=bool) if mask is None else mask
@@ -231,17 +230,6 @@ class DiagonalGaussianObservations(Observations):
     def permute(self, perm):
         self.mus = self.mus[perm]
         self._log_sigmasq = self._log_sigmasq[perm]
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # Initialize with KMeans
-        from sklearn.cluster import KMeans
-        data = np.concatenate(datas)
-        km = KMeans(self.K).fit(data)
-        self.mus = km.cluster_centers_
-        sigmas = np.array([np.var(data[km.labels_ == k], axis=0)
-                           for k in range(self.K)])
-        self._log_sigmasq = np.log(sigmas + 1e-16)
 
     def log_likelihoods(self, data, input, mask, tag):
         mus, sigmas = self.mus, np.exp(self._log_sigmasq) + 1e-16
@@ -297,17 +285,6 @@ class StudentsTObservations(Observations):
         self.mus = self.mus[perm]
         self._log_sigmasq = self._log_sigmasq[perm]
         self._log_nus = self._log_nus[perm]
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # Initialize with KMeans
-        from sklearn.cluster import KMeans
-        data = np.concatenate(datas)
-        km = KMeans(self.K).fit(data)
-        self.mus = km.cluster_centers_
-        sigmas = np.array([np.var(data[km.labels_ == k], axis=0) for k in range(self.K)])
-        self._log_sigmasq = np.log(sigmas + 1e-16)
-        self._log_nus = np.log(4) * np.ones((self.K, self.D))
 
     def log_likelihoods(self, data, input, mask, tag):
         D, mus, sigmas, nus = self.D, self.mus, self.sigmasq, self.nus
@@ -425,19 +402,6 @@ class MultivariateStudentsTObservations(Observations):
         self._sqrt_Sigmas = self._sqrt_Sigmas[perm]
         self._log_nus = self._log_nus[perm]
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # Initialize with KMeans
-        from sklearn.cluster import KMeans
-        data = np.concatenate(datas)
-        km = KMeans(self.K).fit(data)
-        self.mus = km.cluster_centers_
-        Sigmas = np.array([np.atleast_2d(np.cov(data[km.labels_ == k].T))
-                           for k in range(self.K)])
-        assert np.all(np.isfinite(Sigmas))
-        self._sqrt_Sigmas = np.linalg.cholesky(Sigmas + 1e-8 * np.eye(self.D))
-        self._log_nus = np.log(4) * np.ones((self.K,))
-
     def log_likelihoods(self, data, input, mask, tag):
         assert np.all(mask), "MultivariateStudentsTObservations does not support missing data"
         D, mus, Sigmas, nus = self.D, self.mus, self.Sigmas, self.nus
@@ -552,16 +516,6 @@ class BernoulliObservations(Observations):
     def permute(self, perm):
         self.logit_ps = self.logit_ps[perm]
 
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-
-        # Initialize with KMeans
-        from sklearn.cluster import KMeans
-        data = np.concatenate(datas)
-        km = KMeans(self.K).fit(data)
-        ps = np.clip(km.cluster_centers_, 1e-3, 1-1e-3)
-        self.logit_ps = logit(ps)
-
     def log_likelihoods(self, data, input, mask, tag):
         mask = np.ones_like(data, dtype=bool) if mask is None else mask
         return stats.bernoulli_logpdf(data[:, None, :], self.logit_ps, mask=mask[:, None, :])
@@ -602,15 +556,6 @@ class PoissonObservations(Observations):
 
     def permute(self, perm):
         self.log_lambdas = self.log_lambdas[perm]
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-
-        # Initialize with KMeans
-        from sklearn.cluster import KMeans
-        data = np.concatenate(datas)
-        km = KMeans(self.K).fit(data)
-        self.log_lambdas = np.log(km.cluster_centers_ + 1e-3)
 
     def log_likelihoods(self, data, input, mask, tag):
         lambdas = np.exp(self.log_lambdas)
@@ -655,10 +600,6 @@ class CategoricalObservations(Observations):
 
     def permute(self, perm):
         self.logits = self.logits[perm]
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        pass
 
     def log_likelihoods(self, data, input, mask, tag):
         mask = np.ones_like(data, dtype=bool) if mask is None else mask
@@ -781,7 +722,8 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
     def __init__(self, K, D, M=0, lags=1,
                  l2_penalty_A=1e-8,
                  l2_penalty_b=1e-8,
-                 l2_penalty_V=1e-8):
+                 l2_penalty_V=1e-8,
+                 nu0=1e-4, Psi0=1e-4):
         super(AutoRegressiveObservations, self).\
             __init__(K, D, M, lags=lags)
 
@@ -793,7 +735,21 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         self._sqrt_Sigmas_init = np.tile(np.eye(D)[None, ...], (K, 1, 1))
         self._sqrt_Sigmas = npr.randn(K, D, D)
 
-        # Regularization penalties on A, b, and V
+        # Set natural parameters of Gaussian prior on (A, V, b) weight matrix
+        J0_diag = np.concatenate((l2_penalty_A * np.ones(D * lags),
+                                  l2_penalty_V * np.ones(M),
+                                  l2_penalty_b * np.ones(1)))
+        self.J0 = np.tile(np.diag(J0_diag)[None, :, :], (K, 1, 1))
+
+        h0 = np.concatenate((l2_penalty_A * np.eye(D),
+                             np.zeros((D * (lags - 1), D)),
+                             np.zeros((M + 1, D))))
+        self.h0 = np.tile(h0[None, :, :], (K, 1, 1))
+
+        # Set natural parameters of inverse Wishart prior on Sigma
+        self.nu0 = nu0
+        self.Psi0 = Psi0 * np.eye(D) if np.isscalar(Psi0) else Psi0
+
         self.l2_penalty_A = l2_penalty_A
         self.l2_penalty_b = l2_penalty_b
         self.l2_penalty_V = l2_penalty_V
@@ -814,7 +770,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
     @b.setter
     def b(self, value):
         assert value.shape == self.bs[0].shape
-        self.bs[0] == value
+        self.bs[0] = value
 
     @property
     def Sigmas_init(self):
@@ -823,7 +779,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
     @Sigmas_init.setter
     def Sigmas_init(self, value):
         assert value.shape == (self.K, self.D, self.D)
-        self._sqrt_Sigmas_init = np.linalg.cholesky(value)
+        self._sqrt_Sigmas_init = np.linalg.cholesky(value + 1e-8 * np.eye(self.D))
 
     @property
     def Sigmas(self):
@@ -832,7 +788,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
     @Sigmas.setter
     def Sigmas(self, value):
         assert value.shape == (self.K, self.D, self.D)
-        self._sqrt_Sigmas = np.linalg.cholesky(value)
+        self._sqrt_Sigmas = np.linalg.cholesky(value + 1e-8 * np.eye(self.D))
 
     @property
     def params(self):
@@ -846,27 +802,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
     def permute(self, perm):
         super(AutoRegressiveObservations, self).permute(perm)
         self._sqrt_Sigmas = self._sqrt_Sigmas[perm]
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None, localize=True):
-        # Sample time bins for each discrete state.
-        # Use the data to cluster the time bins if specified.
-        K, D, M, lags = self.K, self.D, self.M, self.lags
-        Ts = [data.shape[0] for data in datas]
-        if localize:
-            from sklearn.cluster import KMeans
-            km = KMeans(self.K)
-            km.fit(np.vstack(datas))
-            zs = np.split(km.labels_, np.cumsum(Ts)[:-1])
-        else:
-            zs = [npr.choice(self.K, size=T) for T in Ts]
-
-        # Make a one-hot encoding of z and treat it as HMM expectations
-        Ezs = [one_hot(z, K) for z in zs]
-        expectations = [(Ez, None, None) for Ez in Ezs]
-
-        # # Set the variances all at once to use the setter
-        self.m_step(expectations, datas, inputs, masks, tags)
 
     def log_likelihoods(self, data, input, mask, tag=None):
         assert np.all(mask), "Cannot compute likelihood of autoregressive obsevations with missing data."
@@ -983,7 +918,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         return ExuxuTs, ExuyTs, EyyTs, Ens
 
     def m_step(self, expectations, datas, inputs, masks, tags,
-               J0=None, h0=None, nu0=None, Psi0=None,
                continuous_expectations=None, **kwargs):
         """Compute M-step for Gaussian Auto Regressive Observations.
 
@@ -1000,27 +934,6 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         """
         K, D, M, lags = self.K, self.D, self.M, self.lags
 
-        # Set up the prior
-        if J0 is None:
-            J0_diag = np.concatenate((self.l2_penalty_A * np.ones(D * lags),
-                                     self.l2_penalty_V * np.ones(M),
-                                     self.l2_penalty_b * np.ones(1)))
-            J0 = np.tile(np.diag(J0_diag)[None, :, :], (K, 1, 1))
-
-        if h0 is None:
-            h0 = np.concatenate((np.zeros((D * (lags - 1), D)),
-                                 self.l2_penalty_A * np.eye(D),
-                                 np.zeros((M + 1, D))))
-            h0 = np.tile(h0[None, :, :], (K, 1, 1))
-
-        if nu0 is None:
-            nu0 = 1
-
-        if Psi0 is None:
-            Psi0 = np.eye(D)
-        elif np.isscalar(Psi0):
-            Psi0 = Psi0 * np.eye(D)
-
         # Collect sufficient statistics
         if continuous_expectations is None:
             ExuxuTs, ExuyTs, EyyTs, Ens = self._get_sufficient_statistics(expectations, datas, inputs)
@@ -1034,15 +947,16 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         bs = np.zeros((K, D))
         Sigmas = np.zeros((K, D, D))
         for k in range(K):
-            Wk = np.linalg.solve(ExuxuTs[k] + J0[k], ExuyTs[k] + h0[k]).T
+            Wk = np.linalg.solve(ExuxuTs[k] + self.J0[k], ExuyTs[k] + self.h0[k]).T
             As[k] = Wk[:, :D * lags]
             Vs[k] = Wk[:, D * lags:-1]
             bs[k] = Wk[:, -1]
 
             # Solve for the MAP estimate of the covariance
-            sqerr = EyyTs[k] - 2 * Wk @ ExuyTs[k] + Wk @ ExuxuTs[k] @ Wk.T
-            nu = nu0 + Ens[k]
-            Sigmas[k] = (sqerr + Psi0) / (nu + D + 1)
+            EWxyT =  Wk @ ExuyTs[k]
+            sqerr = EyyTs[k] - EWxyT.T - EWxyT + Wk @ ExuxuTs[k] @ Wk.T
+            nu = self.nu0 + Ens[k]
+            Sigmas[k] = (sqerr + self.Psi0) / (nu + D + 1)
 
         # If any states are unused, set their parameters to a perturbation of a used state
         unused = np.where(Ens < 1)[0]
@@ -1054,7 +968,7 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
                 Vs[k] = Vs[i] + 0.01 * npr.randn(*Vs[i].shape)
                 bs[k] = bs[i] + 0.01 * npr.randn(*bs[i].shape)
                 Sigmas[k] = Sigmas[i]
-                
+
         # Update parameters via their setter
         self.As = As
         self.Vs = Vs
@@ -1218,8 +1132,6 @@ class AutoRegressiveDiagonalNoiseObservations(AutoRegressiveObservations):
 
 
         # Compute the likelihood of the initial data and remainder separately
-        # ll_init = stats.diagonal_gaussian_logpdf(data[:L, None, :], mus[:L], self.sigmasq_init)
-        # ll_ar = stats.diagonal_gaussian_logpdf(data[L:, None, :], mus[L:], self.sigmasq)
         return np.row_stack((ll_init, ll_ar))
 
 
@@ -1266,29 +1178,6 @@ class IndependentAutoRegressiveObservations(_AutoRegressiveObservationsBase):
         self.Vs = self.Vs[perm]
         self._log_sigmasq_init = self._log_sigmasq_init[perm]
         self._log_sigmasq = self._log_sigmasq[perm]
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # Initialize with linear regressions
-        from sklearn.linear_model import LinearRegression
-        data = np.concatenate(datas)
-        input = np.concatenate(inputs)
-        T = data.shape[0]
-
-        for k in range(self.K):
-            for d in range(self.D):
-                ts = npr.choice(T-self.lags, replace=False, size=(T-self.lags)//self.K)
-                x = np.column_stack([data[ts + l, d:d+1] for l in range(self.lags)] + [input[ts, :self.M]])
-                y = data[ts+self.lags, d:d+1]
-                lr = LinearRegression().fit(x, y)
-
-                self.As[k, d] = lr.coef_[:, :self.lags]
-                self.Vs[k, d] = lr.coef_[:, self.lags:self.lags+self.M]
-                self.bs[k, d] = lr.intercept_
-
-                resid = y - lr.predict(x)
-                sigmas = np.var(resid, axis=0)
-                self._log_sigmasq[k, d] = np.log(sigmas + 1e-16)
 
     def _compute_mus(self, data, input, mask, tag):
         """
@@ -1420,6 +1309,12 @@ class _RobustAutoRegressiveObservationsMixin(object):
                      l2_penalty_V=l2_penalty_V)
         self._log_nus = np.log(4) * np.ones(K)
 
+        J_diag = np.concatenate((l2_penalty_A * np.ones(D * lags),
+                                 l2_penalty_V * np.ones(M),
+                                 l2_penalty_b * np.ones(1)))
+        self.J0 = np.tile(np.diag(J_diag)[None, :, :], (K, 1, 1))
+        self.h0 = np.zeros((K, D * lags + M + 1, D))
+
     @property
     def nus(self):
         return np.exp(self._log_nus)
@@ -1455,16 +1350,16 @@ class _RobustAutoRegressiveObservationsMixin(object):
 
         return np.row_stack((ll_init, ll_ar))
 
-    def m_step(self, expectations, datas, inputs, masks, tags, num_em_iters=1, J0=None, h0=None):
+    def m_step(self, expectations, datas, inputs, masks, tags, num_em_iters=1):
         """
         Student's t is a scale mixture of Gaussians.  We can estimate its
         parameters using the EM algorithm. See the notebook in doc/students_t
         for complete details.
         """
-        self._m_step_ar(expectations, datas, inputs, masks, tags, num_em_iters, J0=J0, h0=h0)
+        self._m_step_ar(expectations, datas, inputs, masks, tags, num_em_iters)
         self._m_step_nu(expectations, datas, inputs, masks, tags)
 
-    def _m_step_ar(self, expectations, datas, inputs, masks, tags, num_em_iters, J0=None, h0=None):
+    def _m_step_ar(self, expectations, datas, inputs, masks, tags, num_em_iters):
         K, D, M, lags = self.K, self.D, self.M, self.lags
 
         # Collect data for this dimension
@@ -1496,18 +1391,8 @@ class _RobustAutoRegressiveObservationsMixin(object):
             # M step: Fit the weighted linear regressions for each K and D
             # This is exactly the same as the M-step for the AutoRegressiveObservations,
             # but it has an extra scaling factor of tau applied to the weight.
-            if J0 is None and h0 is None:
-                J_diag = np.concatenate((self.l2_penalty_A * np.ones(D * lags),
-                                 self.l2_penalty_V * np.ones(M),
-                                 self.l2_penalty_b * np.ones(1)))
-                J = np.tile(np.diag(J_diag)[None, :, :], (K, 1, 1))
-                h = np.zeros((K, D * lags + M + 1, D))
-            else:
-                assert J0.shape == (K, D*lags + M + 1, D*lags + M + 1)
-                assert h0.shape == (K, D*lags + M + 1, D)
-                J = J0
-                h = h0
-
+            J = self.J0.copy()
+            h = self.h0.copy()
             for x, y, Ez, tau in zip(xs, ys, Ezs, taus):
                 weight = Ez * tau
                 # Einsum is concise but slow!
@@ -1788,11 +1673,6 @@ class VonMisesObservations(Observations):
     def permute(self, perm):
         self.mus = self.mus[perm]
         self.log_kappas = self.log_kappas[perm]
-
-    @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # TODO: add spherical k-means for initialization
-        pass
 
     def log_likelihoods(self, data, input, mask, tag):
         mus, kappas = self.mus, np.exp(self.log_kappas)

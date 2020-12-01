@@ -113,9 +113,14 @@ class StationaryTransitions(Transitions):
         return log_Ps[None, :, :]
 
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
-        P = sum([np.sum(Ezzp1, axis=0) for _, Ezzp1, _ in expectations])
-        P /= P.sum(axis=-1, keepdims=True)
-        self.log_Ps = np.log(P + LOG_EPS)
+        K = self.K
+        P = sum([np.sum(Ezzp1, axis=0) for _, Ezzp1, _ in expectations]) + 1e-32
+        P = np.nan_to_num(P / P.sum(axis=-1, keepdims=True))
+
+        # Set rows that are all zero to uniform
+        P = np.where(P.sum(axis=-1, keepdims=True) == 0, 1.0 / K, P)
+        log_P = np.log(P)
+        self.log_Ps = log_P - logsumexp(log_P, axis=-1, keepdims=True)
 
     def neg_hessian_expected_log_trans_prob(self, data, input, mask, tag, expected_joints):
         # Return (T-1, D, D) array of blocks for the diagonal of the Hessian
@@ -151,11 +156,11 @@ class ConstrainedStationaryTransitions(StationaryTransitions):
         for i in range(transition_mask.shape[0]):
             assert transition_mask[i].any(), "Mask must contain at least one " \
                 "nonzero entry per row."
-        
+
         self.transition_mask = transition_mask
         Ps = Ps * transition_mask
         Ps /= Ps.sum(axis=-1, keepdims=True)
-        self.log_Ps = np.log(Ps + LOG_EPS)
+        self.log_Ps = np.log(Ps)
         self.log_Ps[~transition_mask] = -np.inf
 
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
@@ -167,7 +172,7 @@ class ConstrainedStationaryTransitions(StationaryTransitions):
             tags,
             **kwargs
         )
-        assert np.allclose(self.transition_matrix[~self.transition_mask], 0, 
+        assert np.allclose(self.transition_matrix[~self.transition_mask], 0,
                            atol=2 * LOG_EPS)
         self.log_Ps[~self.transition_mask] = -np.inf
 
@@ -195,7 +200,7 @@ class StickyTransitions(StationaryTransitions):
 
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
         expected_joints = sum([np.sum(Ezzp1, axis=0) for _, Ezzp1, _ in expectations]) + 1e-16
-        expected_joints += self.kappa * np.eye(self.K) + (self.alpha-1) * np.ones((self.K, self.K)) 
+        expected_joints += self.kappa * np.eye(self.K) + (self.alpha-1) * np.ones((self.K, self.K))
         P = (expected_joints / expected_joints.sum(axis=1, keepdims=True)) + 1e-16
         assert np.all(P >= 0), "mode is well defined only when transition matrix entries are non-negative! Check alpha >= 1"
         self.log_Ps = np.log(P)
@@ -284,7 +289,7 @@ class RecurrentTransitions(InputDrivenTransitions):
         self.Rs = self.Rs[perm]
 
     def log_transition_matrices(self, data, input, mask, tag):
-        T, D = data.shape
+        T, _ = data.shape
         # Previous state effect
         log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1))
         # Input effect
@@ -350,7 +355,6 @@ class RecurrentOnlyTransitions(Transitions):
         self.r = self.r[perm]
 
     def log_transition_matrices(self, data, input, mask, tag):
-        T, D = data.shape
         log_Ps = np.dot(input[1:], self.Ws.T)[:, None, :]              # inputs
         log_Ps = log_Ps + np.dot(data[:-1], self.Rs.T)[:, None, :]     # past observations
         log_Ps = log_Ps + self.r                                       # bias

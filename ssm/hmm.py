@@ -10,7 +10,7 @@ from ssm.primitives import hmm_normalizer
 from ssm.messages import hmm_expected_states, hmm_filter, hmm_sample, viterbi
 from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, \
-    replicate, collapse
+    replicate, collapse, ssm_pbar
 
 import ssm.observations as obs
 import ssm.transitions as trans
@@ -138,13 +138,13 @@ class HMM(object):
         self.observations.params = value[2]
 
     @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None):
+    def initialize(self, datas, inputs=None, masks=None, tags=None, init_method="random"):
         """
         Initialize parameters given data.
         """
         self.init_state_distn.initialize(datas, inputs=inputs, masks=masks, tags=tags)
         self.transitions.initialize(datas, inputs=inputs, masks=masks, tags=tags)
-        self.observations.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+        self.observations.initialize(datas, inputs=inputs, masks=masks, tags=tags, init_method=init_method)
 
     def permute(self, perm):
         """
@@ -202,7 +202,7 @@ class HMM(object):
         dummy_data = self.observations.sample_x(0, np.empty(0,) + D)
         dtype = dummy_data.dtype
 
-        # Initialize the data array
+        # fit( the data array
         if prefix is None:
             # No prefix is given.  Sample the initial state as the prefix.
             pad = 1
@@ -339,7 +339,7 @@ class HMM(object):
         return ell + self.log_prior()
 
     # Model fitting
-    def _fit_sgd(self, optimizer, datas, inputs, masks, tags, num_iters=1000, **kwargs):
+    def _fit_sgd(self, optimizer, datas, inputs, masks, tags, verbose = 2, num_iters=1000, **kwargs):
         """
         Fit the model with maximum marginal likelihood.
         """
@@ -350,9 +350,8 @@ class HMM(object):
             return -obj / T
 
         # Set up the progress bar
-        lls = [-_objective(self.params, 0) * T]
-        pbar = trange(num_iters)
-        pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(0, 0, lls[-1]))
+        lls  = [-_objective(self.params, 0) * T]
+        pbar = ssm_pbar(num_iters, verbose, "Epoch {} Itr {} LP: {:.1f}", [0, 0, lls[-1]])
 
         # Run the optimizer
         step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step)[optimizer]
@@ -360,12 +359,13 @@ class HMM(object):
         for itr in pbar:
             self.params, val, g, state = step(value_and_grad(_objective), self.params, itr, state, **kwargs)
             lls.append(-val * T)
-            pbar.set_description("LP: {:.1f}".format(lls[-1]))
-            pbar.update(1)
+            if verbose == 2:
+              pbar.set_description("LP: {:.1f}".format(lls[-1]))
+              pbar.update(1)
 
         return lls
 
-    def _fit_stochastic_em(self, optimizer, datas, inputs, masks, tags, num_epochs=100, **kwargs):
+    def _fit_stochastic_em(self, optimizer, datas, inputs, masks, tags, verbose = 2, num_epochs=100, **kwargs):
         """
         Replace the M-step of EM with a stochastic gradient update using the ELBO computed
         on a minibatch of data.
@@ -407,37 +407,38 @@ class HMM(object):
             return -obj / T
 
         # Set up the progress bar
-        lls = [-_objective(self.params, 0) * T]
-        pbar = trange(num_epochs * M)
-        pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(0, 0, lls[-1]))
+        lls  = [-_objective(self.params, 0) * T]
+        pbar = ssm_pbar(num_epochs * M, verbose, "Epoch {} Itr {} LP: {:.1f}", [0, 0, lls[-1]])
 
         # Run the optimizer
         step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step)[optimizer]
         state = None
         for itr in pbar:
-            self.params, val, g, state = step(value_and_grad(_objective), self.params, itr, state, **kwargs)
+            self.params, val, _, state = step(value_and_grad(_objective), self.params, itr, state, **kwargs)
             epoch = itr // M
             m = itr % M
             lls.append(-val * T)
-            pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(epoch, m, lls[-1]))
-            pbar.update(1)
+            if verbose == 2:
+              pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(epoch, m, lls[-1]))
+              pbar.update(1)
 
         return lls
 
-    def _fit_em(self, datas, inputs, masks, tags, num_iters=100, tolerance=0,
+    def _fit_em(self, datas, inputs, masks, tags, verbose = 2, num_iters=100, tolerance=0,
                 init_state_mstep_kwargs={},
                 transitions_mstep_kwargs={},
-                observations_mstep_kwargs={}):
+                observations_mstep_kwargs={},
+                **kwargs):
         """
         Fit the parameters with expectation maximization.
 
         E step: compute E[z_t] and E[z_t, z_{t+1}] with message passing;
         M-step: analytical maximization of E_{p(z | x)} [log p(x, z; theta)].
         """
-        lls = [self.log_probability(datas, inputs, masks, tags)]
+        lls  = [self.log_probability(datas, inputs, masks, tags)]
 
-        pbar = trange(num_iters)
-        pbar.set_description("LP: {:.1f}".format(lls[-1]))
+        pbar = ssm_pbar(num_iters, verbose, "LP: {:.1f}", [lls[-1]])
+
         for itr in pbar:
             # E step: compute expected latent states with current parameters
             expectations = [self.expected_states(data, input, mask, tag)
@@ -451,18 +452,25 @@ class HMM(object):
 
             # Store progress
             lls.append(self.log_prior() + sum([ll for (_, _, ll) in expectations]))
-            pbar.set_description("LP: {:.1f}".format(lls[-1]))
+
+            if verbose == 2:
+              pbar.set_description("LP: {:.1f}".format(lls[-1]))
 
             # Check for convergence
             if itr > 0 and abs(lls[-1] - lls[-2]) < tolerance:
-                pbar.set_description("Converged to LP: {:.1f}".format(lls[-1]))
+                if verbose == 2:
+                  pbar.set_description("Converged to LP: {:.1f}".format(lls[-1]))
                 break
 
         return lls
 
     @ensure_args_are_lists
     def fit(self, datas, inputs=None, masks=None, tags=None,
-            method="em", initialize=True, **kwargs):
+            verbose=2, method="em",
+            initialize=True,
+            init_method="random",
+            **kwargs):
+
         _fitting_methods = \
             dict(sgd=partial(self._fit_sgd, "sgd"),
                  adam=partial(self._fit_sgd, "adam"),
@@ -476,14 +484,24 @@ class HMM(object):
                             format(method, _fitting_methods.keys()))
 
         if initialize:
-            self.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+            self.initialize(datas,
+                            inputs=inputs,
+                            masks=masks,
+                            tags=tags,
+                            init_method=init_method)
 
         if isinstance(self.transitions,
                       trans.ConstrainedStationaryTransitions):
             if method != "em":
-                raise Exception("Only EM is implemented "
-                                "for Constrained transitions.")
-        return _fitting_methods[method](datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
+                raise Exception("Only EM is implemented for constrained transitions.")
+
+       # print(verbose)
+        return _fitting_methods[method](datas,
+                                        inputs=inputs,
+                                        masks=masks,
+                                        tags=tags,
+                                        verbose=verbose,
+                                        **kwargs)
 
 
 class HSMM(HMM):
@@ -746,7 +764,7 @@ class HSMM(HMM):
         """
         raise NotImplementedError("Need to get raw expectations for the expected transition probability.")
 
-    def _fit_em(self, datas, inputs, masks, tags, num_iters=100, **kwargs):
+    def _fit_em(self, datas, inputs, masks, tags, verbose = 2, num_iters=100, **kwargs):
         """
         Fit the parameters with expectation maximization.
 
@@ -755,8 +773,8 @@ class HSMM(HMM):
         """
         lls = [self.log_probability(datas, inputs, masks, tags)]
 
-        pbar = trange(num_iters)
-        pbar.set_description("LP: {:.1f}".format(lls[-1]))
+        pbar = ssm_pbar(num_iters, verbose, "LP: {:.1f}", [lls[-1]])
+
         for itr in pbar:
             # E step: compute expected latent states with current parameters
             expectations = [self.expected_states(data, input, mask, tag)
@@ -773,12 +791,14 @@ class HSMM(HMM):
 
             # Store progress
             lls.append(self.log_prior() + sum([ll for (_, _, ll) in expectations]))
-            pbar.set_description("LP: {:.1f}".format(lls[-1]))
+            if verbose == 2:
+                pbar.set_description("LP: {:.1f}".format(lls[-1]))
 
         return lls
 
     @ensure_args_are_lists
-    def fit(self, datas, inputs=None, masks=None, tags=None, method="em", initialize=True, **kwargs):
+    def fit(self, datas, inputs=None, masks=None, tags=None, verbose = 2,
+            method="em", initialize=True, **kwargs):
         _fitting_methods = dict(em=self._fit_em)
 
         if method not in _fitting_methods:
@@ -786,6 +806,6 @@ class HSMM(HMM):
                             format(method, _fitting_methods.keys()))
 
         if initialize:
-            self.initialize(datas, inputs=inputs, masks=masks, tags=tags)
+            self.initialize(datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
 
-        return _fitting_methods[method](datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
+        return _fitting_methods[method](datas, inputs=inputs, masks=masks, tags=tags, verbose = verbose, **kwargs)

@@ -11,7 +11,7 @@ from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
 from ssm.primitives import hmm_normalizer
 from ssm.messages import hmm_expected_states, viterbi
 from ssm.util import ensure_args_are_lists, \
-    ensure_slds_args_not_none, ensure_variational_args_are_lists
+    ensure_slds_args_not_none, ensure_variational_args_are_lists, ssm_pbar
 from ssm.util import LOG_EPS, DIV_EPS
 from autograd.scipy.special import logsumexp
 
@@ -35,13 +35,10 @@ class SLDS(object):
                  init_state_distn=None,
                  transitions="standard",
                  transition_kwargs=None,
-                 hierarchical_transition_tags=None,
                  dynamics="gaussian",
                  dynamics_kwargs=None,
-                 hierarchical_dynamics_tags=None,
                  emissions="gaussian_orthog",
                  emission_kwargs=None,
-                 hierarchical_emission_tags=None,
                  single_subspace=True,
                  **kwargs):
 
@@ -163,7 +160,11 @@ class SLDS(object):
         self.emissions.params = value[3]
 
     @ensure_args_are_lists
-    def initialize(self, datas, inputs=None, masks=None, tags=None, num_iters=25):
+    def initialize(self, datas, inputs=None, masks=None, tags=None,
+                   verbose=0,
+                   num_init_iters=50,
+                   discrete_state_init_method="random",
+                   num_init_restarts=1):
         # First initialize the observation model
         self.emissions.initialize(datas, inputs, masks, tags)
 
@@ -172,19 +173,37 @@ class SLDS(object):
               for data, input, mask, tag in zip(datas, inputs, masks, tags)]
         xmasks = [np.ones_like(x, dtype=bool) for x in xs]
 
-        # Now run a few iterations of EM on a ARHMM with the variational mean
-        print("Initializing with an ARHMM using {} steps of EM.".format(num_iters))
-        arhmm = hmm.HMM(self.K, self.D, M=self.M,
-                        init_state_distn=copy.deepcopy(self.init_state_distn),
-                        transitions=copy.deepcopy(self.transitions),
-                        observations=copy.deepcopy(self.dynamics))
+        # Number of times to run the arhmm initialization (we'll use the one with the highest log probability as the initialization)
+        pbar  = ssm_pbar(num_init_restarts, 2, "ARHMM Initialization restarts", [''])
 
-        arhmm.fit(xs, inputs=inputs, masks=xmasks, tags=tags,
-                  method="em", num_iters=num_iters)
+        #Loop through initialization restarts
+        best_lp = -np.inf
+        for i in pbar: #range(num_init_restarts):
 
-        self.init_state_distn = copy.deepcopy(arhmm.init_state_distn)
-        self.transitions = copy.deepcopy(arhmm.transitions)
-        self.dynamics = copy.deepcopy(arhmm.observations)
+            # Now run a few iterations of EM on a ARHMM with the variational mean
+            if verbose > 0:
+                print("Initializing with an ARHMM using {} steps of EM.".format(num_init_iters))
+
+            arhmm = hmm.HMM(self.K, self.D, M=self.M,
+                            init_state_distn=copy.deepcopy(self.init_state_distn),
+                            transitions=copy.deepcopy(self.transitions),
+                            observations=copy.deepcopy(self.dynamics))
+
+            arhmm.fit(xs, inputs=inputs, masks=xmasks, tags=tags,
+                      verbose=verbose,
+                      method="em",
+                      num_iters=num_init_iters,
+                      init_method=discrete_state_init_method)
+
+            #Keep track of the arhmm that led to the highest log probability
+            current_lp = arhmm.log_probability(xs)
+            if current_lp > best_lp:
+                best_lp =  copy.deepcopy(current_lp)
+                best_arhmm = copy.deepcopy(arhmm)
+
+        self.init_state_distn = copy.deepcopy(best_arhmm.init_state_distn)
+        self.transitions = copy.deepcopy(best_arhmm.transitions)
+        self.dynamics = copy.deepcopy(best_arhmm.observations)
 
     def permute(self, perm):
         """
@@ -231,7 +250,7 @@ class SLDS(object):
             zhist, xhist, yhist = prefix
             pad = len(zhist)
             assert zhist.dtype == int and zhist.min() >= 0 and zhist.max() < K
-            assert xhist.shape == (pad, D)
+            # assert xhist.shape == (pad, D)
             assert yhist.shape == (pad, N)
 
             z = np.concatenate((zhist, np.zeros(T, dtype=int)))
@@ -254,7 +273,7 @@ class SLDS(object):
     @ensure_slds_args_not_none
     def expected_states(self, variational_mean, data, input=None, mask=None, tag=None):
         x_mask = np.ones_like(variational_mean, dtype=bool)
-        pi0 = self.init_state_distn.log_initial_state_distn
+        pi0 = self.init_state_distn.initial_state_distn
         Ps = self.transitions.transition_matrices(variational_mean, input, x_mask, tag)
         log_likes = self.dynamics.log_likelihoods(variational_mean, input, x_mask, tag)
         log_likes += self.emissions.log_likelihoods(data, input, mask, tag, variational_mean)
@@ -283,7 +302,7 @@ class SLDS(object):
         return np.nan
 
     @ensure_variational_args_are_lists
-    def _bbvi_elbo(self, variational_posterior, datas, inputs=None, masks=None, tags=None, n_samples=1):
+    def _bbvi_elbo(self, variational_posterior, datas, inputs=None, masks=None, tags=None,  n_samples=1):
         """
         Lower bound on the marginal likelihood p(y | theta)
         using variational posterior q(x; phi) where phi = variational_params
@@ -314,7 +333,7 @@ class SLDS(object):
 
         return elbo / n_samples
 
-    def _fit_bbvi(self, variational_posterior, datas, inputs, masks, tags,
+    def _fit_bbvi(self, variational_posterior, datas, inputs, masks, tags, verbose = 2,
                   learning=True, optimizer="adam", num_iters=100, **kwargs):
         """
         Fit with black box variational inference using a
@@ -339,8 +358,7 @@ class SLDS(object):
 
         # Set up the progress bar
         elbos = [-_objective(params, 0) * T]
-        pbar = trange(num_iters)
-        pbar.set_description("ELBO: {:.1f}".format(elbos[0]))
+        pbar  = ssm_pbar(num_iters, verbose, "LP: {:.1f}", [elbos[0]])
 
         # Run the optimizer
         step = dict(sgd=sgd_step, rmsprop=rmsprop_step, adam=adam_step)[optimizer]
@@ -352,8 +370,9 @@ class SLDS(object):
             # TODO: Check for convergence -- early stopping
 
             # Update progress bar
-            pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
-            pbar.update()
+            if verbose == 2:
+              pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
+              pbar.update()
 
         # Save the final parameters
         if learning:
@@ -361,7 +380,7 @@ class SLDS(object):
         else:
             variational_posterior.params = params
 
-        return elbos
+        return np.array(elbos)
 
     def _fit_laplace_em_discrete_state_update(
         self, variational_posterior, datas,
@@ -432,7 +451,7 @@ class SLDS(object):
         elp = np.sum(Ez[0] * log_pi0)
         elp += np.sum(Ezzp1 * log_Ps)
         elp += np.sum(Ez * log_likes)
-        # assert np.all(np.isfinite(elp))
+        assert np.all(np.isfinite(elp))
         return -1 * elp / scale
 
     # We also need the hessian of the of the expected log joint
@@ -582,7 +601,12 @@ class SLDS(object):
                       masks=xmasks,
                       tags=tags
         )
-        if isinstance(self.dynamics, obs.AutoRegressiveObservations) and self.dynamics.lags == 1:
+        exact_m_step_dynamics = [
+           obs.AutoRegressiveObservations,
+           obs.AutoRegressiveObservationsNoInput,
+           obs.AutoRegressiveDiagonalNoiseObservations,
+        ]
+        if type(self.dynamics) in exact_m_step_dynamics and self.dynamics.lags == 1:
             # In this case, we can do an exact M-step on the dynamics by passing
             # in the true sufficient statistics for the continuous state.
             kwargs["continuous_expectations"] = variational_posterior.continuous_expectations
@@ -640,6 +664,7 @@ class SLDS(object):
 
     def _fit_laplace_em(self, variational_posterior, datas,
                         inputs=None, masks=None, tags=None,
+                        verbose = 2,
                         num_iters=100,
                         num_samples=1,
                         continuous_optimizer="newton",
@@ -657,8 +682,8 @@ class SLDS(object):
         Assume q(z) is a chain-structured discrete graphical model.
         """
         elbos = [self._laplace_em_elbo(variational_posterior, datas, inputs, masks, tags)]
-        pbar = trange(num_iters)
-        pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
+
+        pbar = ssm_pbar(num_iters, verbose, "ELBO: {:.1f}", [elbos[-1]])
 
         for itr in pbar:
             # 1. Update the discrete state posterior q(z) if K>1
@@ -679,9 +704,10 @@ class SLDS(object):
 
             elbos.append(self._laplace_em_elbo(
                 variational_posterior, datas, inputs, masks, tags))
-            pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
+            if verbose == 2:
+              pbar.set_description("ELBO: {:.1f}".format(elbos[-1]))
 
-        return elbos
+        return np.array(elbos)
 
     def _make_variational_posterior(self, variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs):
         # Initialize the variational posterior
@@ -719,10 +745,13 @@ class SLDS(object):
         return posterior
 
     @ensure_args_are_lists
-    def fit(self, datas, inputs=None, masks=None, tags=None,
+    def fit(self, datas, inputs=None, masks=None, tags=None, verbose=2,
             method="laplace_em", variational_posterior="structured_meanfield",
             variational_posterior_kwargs=None,
-            initialize=True, num_init_iters=25,
+            initialize=True,
+            discrete_state_init_method="random",
+            num_init_iters=25,
+            num_init_restarts=1,
             **kwargs):
 
         """
@@ -750,12 +779,19 @@ class SLDS(object):
 
         # Initialize the model parameters
         if initialize:
-            self.initialize(datas, inputs, masks, tags, num_iters=num_init_iters)
+            self.initialize(datas, inputs, masks, tags,
+                            verbose=verbose,
+                            discrete_state_init_method=discrete_state_init_method,
+                            num_init_iters=num_init_iters,
+                            num_init_restarts=num_init_restarts)
 
         # Initialize the variational posterior
         variational_posterior_kwargs = variational_posterior_kwargs or {}
-        posterior = self._make_variational_posterior(variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs)
-        elbos = _fitting_methods[method](posterior, datas, inputs, masks, tags, learning=True, **kwargs)
+        posterior = self._make_variational_posterior(
+            variational_posterior, datas, inputs, masks, tags, method, **variational_posterior_kwargs)
+        elbos = _fitting_methods[method](
+            posterior, datas, inputs, masks, tags, verbose,
+            learning=True, **kwargs)
         return elbos, posterior
 
     @ensure_args_are_lists
@@ -1005,10 +1041,8 @@ class LDS(SLDS):
     def __init__(self, N, D, *, M=0,
             dynamics="gaussian",
             dynamics_kwargs=None,
-            hierarchical_dynamics_tags=None,
             emissions="gaussian_orthog",
             emission_kwargs=None,
-            hierarchical_emission_tags=None,
             **kwargs):
 
         # Make the dynamics distn

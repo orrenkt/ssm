@@ -254,7 +254,7 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
     @ensure_variational_args_are_lists
     def __init__(self, model, datas,
                  inputs=None, masks=None, tags=None,
-                 initial_variance=1):
+                 initial_variance=1, smc=False):
 
         super(SLDSStructuredMeanFieldVariationalPosterior, self).\
             __init__(model, datas, masks, tags)
@@ -274,7 +274,7 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
         self._continuous_state_params = None
         self._continuous_expectations = None
         self.continuous_state_params = \
-            [self._initialize_continuous_state_params(data, input, mask, tag)
+            [self._initialize_continuous_state_params(data, input, mask, tag, smc=smc)
              for data, input, mask, tag in tqdm(zip(datas, inputs, masks, tags))]
 
     # Parameters
@@ -331,7 +331,7 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
         log_likes = np.zeros((T, K))
         return dict(pi0=pi0, Ps=Ps, log_likes=log_likes)
 
-    def _initialize_continuous_state_params(self, data, input, mask, tag):
+    def _initialize_continuous_state_params(self, data, input, mask, tag, smc=False):
         T = data.shape[0]
         D = self.D
 
@@ -342,14 +342,15 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
 
         # Set the posterior mean based on the emission model, if possible.
         if self.model.emissions.single_subspace and self.model.emissions.N >= D:
-            # h_obs = (1.0 / self.initial_variance) * self.model.emissions. \
-                # invert(data, input=input, mask=mask, tag=tag)
 
-            # run particle filter
-            # import ipdb; ipdb.set_trace()
-            particles, weights = self.model.smc(data, input, mask, tag, N_particles=25)
-            h_obs = (1.0 / self.initial_variance) * np.mean(particles[0,:,:,:],axis=0)
-            
+            if smc:
+                # run particle filter
+                particles, weights = self.model.smc(data, input, mask, tag, N_particles=25)
+                h_obs = (1.0 / self.initial_variance) * np.mean(particles[0,:,:,:],axis=0)
+            else:
+                h_obs = (1.0 / self.initial_variance) * self.model.emissions. \
+                    invert(data, input=input, mask=mask, tag=tag)
+
         else:
             warn("We can only initialize the continuous states if the emissions lie in a "
                  "single subspace and are of higher dimension than the latent states."

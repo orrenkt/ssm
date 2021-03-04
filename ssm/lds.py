@@ -80,6 +80,7 @@ class SLDS(object):
             studentst=obs.RobustAutoRegressiveObservations,
             diagonal_t=obs.RobustAutoRegressiveDiagonalNoiseObservations,
             diagonal_studentst=obs.RobustAutoRegressiveDiagonalNoiseObservations,
+            bilinear=obs.BilinearObservations,
             )
 
         if isinstance(dynamics, str):

@@ -1715,3 +1715,110 @@ class VonMisesObservations(Observations):
     def smooth(self, expectations, data, input, tag):
         mus = self.mus
         return expectations.dot(mus)
+
+class BilinearObservations(AutoRegressiveObservations):
+    def __init__(self, K, D, M, lags=1):
+        super(BilinearObservations, self).__init__(K, D, M)
+
+        # bilinear dynamics tensor
+        # TODO come up with better initialization
+        Bs = np.array([[np.eye(D) /10. for _ in range(K)] for _ in range(M)])
+        Bs = np.moveaxis(Bs, 0, -1)
+        self.Bs = Bs
+
+    @property
+    def params(self):
+        return super(BilinearObservations, self).params + (self.Bs,)
+
+    @params.setter
+    def params(self, value):
+        self.Bs = value[-1]
+        super(BilinearObservations, self.__class__).params.fset(self, value[:-1])
+    
+    def _compute_mus(self, data, input, mask, tag):
+        # assert np.all(mask), "ARHMM cannot handle missing data"
+        K, M = self.K, self.M
+        T, D = data.shape
+        
+        # get bilinear dynamics parameters
+        As, bs, Vs, mu0s, Bs = self.As, self.bs, self.Vs, self.mu_init, self.Bs
+
+        # Instantaneous inputs
+        mus = np.empty((K, T, D))
+        mus = []
+        for k, (A, b, V, mu0, B) in enumerate(zip(As, bs, Vs, mu0s, Bs)):
+            # Initial condition
+            mus_k_init = mu0 * np.ones((self.lags, D))
+
+            # Subsequent means are determined by the AR process
+            mus_k_ar = np.dot(input[self.lags:, :M], V.T)
+            for l in range(self.lags):
+                Al = A[:, l*D:(l + 1)*D]
+                mus_k_ar = mus_k_ar + np.dot(data[self.lags-l-1:-l-1], Al.T)
+            mus_k_ar = mus_k_ar + b
+            
+            # effect of bilinear dynamics
+            # TODO - check this, see if need to shift input timing. 
+            mus_B = np.array([ np.dot(data[t, :], np.dot(B, input[t, :M])) for t in range(1, T)])
+            mus_k_ar = mus_k_ar + mus_B
+                
+            # Append concatenated mean
+            mus.append(np.vstack((mus_k_init, mus_k_ar)))
+
+        return np.array(mus)
+    
+    def neg_hessian_expected_log_dynamics_prob(self, Ez, data, input, mask, tag=None):
+        assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
+        assert self.lags == 1, "Does not compute negative Hessian of autoregressive observations with lags > 1"
+        
+        # compute time dependent effect of input on dynamics
+        T, D = data.shape
+        Bts = np.array([np.dot(self.Bs, input[t, :]) for t in range(T)]) # T x K x D x D
+        
+        # initial distribution contributes a Gaussian term to first diagonal block
+        J_ini = np.sum(Ez[0, :, None, None] * np.linalg.inv(self.Sigmas_init), axis=0)
+
+        # first part is transition dynamics - goes to all terms except final one
+        # E_q(z) x_{t} A_{z_t+1}.T Sigma_{z_t+1}^{-1} A_{z_t+1} x_{t}
+        inv_Sigmas = np.linalg.inv(self.Sigmas)
+        # dynamics terms is T x K x D x D
+        # here we just add the dynamics B at each time point to A
+        # TODO -> check if time indexing is correct
+        dynamics_terms = np.array([[ (A+B).T @ inv_Sigma @ (A+B) for A, inv_Sigma, B in zip(self.As, inv_Sigmas, Bs)]
+                                     for Bs in Bts[:-1]])
+        
+        J_dyn_11 = np.sum(Ez[1:,:,None,None] * dynamics_terms, axis=1) # (T-1 x D x D)
+
+        # second part of diagonal blocks are inverse covariance matrices - goes to all but first time bin
+        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} x_{t+1}
+        J_dyn_22 = np.sum(Ez[1:,:,None,None] * inv_Sigmas[None,:], axis=1)
+
+        # lower diagonal blocks are (T-1,D,D):
+        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} A_{z_t+1} x_t
+        # TODO - figure out correct time indexing for B
+        off_diag_terms = np.array([[ inv_Sigma @ (A+B) for A, inv_Sigma, B in zip(self.As, inv_Sigmas, Bs)]
+                                     for Bs in Bts[:-1]])
+        J_dyn_21 = -1 * np.sum(Ez[1:,:,None,None] * off_diag_terms, axis=1)
+
+        return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
+    
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+        D, As, bs, Vs, Bs = self.D, self.As, self.bs, self.Vs, self.Bs
+
+        if xhist.shape[0] < self.lags:
+            # Sample from the initial distribution
+            S = np.linalg.cholesky(self.Sigmas_init[z]) if with_noise else 0
+            return self.mu_init[z] + np.dot(S, npr.randn(D))
+        else:
+            # Sample from the autoregressive distribution
+            mu = Vs[z].dot(input[:self.M]) + bs[z]
+            for l in range(self.lags):
+                Al = As[z][:,l*D:(l+1)*D]
+                mu += Al.dot(xhist[-l-1])
+                
+            # effect of bilinear dynamics
+            Bt = np.dot(Bs[z], input[:self.M])
+            mu += np.dot(xhist[-1], Bt)
+
+            S = np.linalg.cholesky(self.Sigmas[z]) if with_noise else 0
+            return mu + np.dot(S, npr.randn(D))

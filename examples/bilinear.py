@@ -39,7 +39,7 @@ M = 2      # number of inputs
 
 # Make an LDS with somewhat interesting dynamics parameters
 true_lds = SLDS(N, K, D, M=M, dynamics="bilinear", emissions="gaussian")
-A0 = .9 * random_rotation(D, theta=np.pi/20)
+A0 = .8 * random_rotation(D, theta=np.pi/20)
 # S = (1 + 3 * npr.rand(D))
 S = np.arange(1, D+1)
 R = np.linalg.svd(npr.randn(D, D))[0] * S
@@ -49,7 +49,7 @@ true_lds.dynamics.As[0] = A
 true_lds.dynamics.bs[0] = b
 
 # Sample
-us = npr.choice([0,1], (T, M), replace=True)
+us = 0.2 * npr.choice([0,1], (T, M), replace=True)
 z, x, y = true_lds.sample(T)
 
 print("Fitting LDS with Laplace EM")

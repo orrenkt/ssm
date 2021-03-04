@@ -1722,7 +1722,8 @@ class BilinearObservations(AutoRegressiveObservations):
 
         # bilinear dynamics tensor
         # TODO come up with better initialization
-        Bs = np.array([[np.eye(D) /10. for _ in range(K)] for _ in range(M)])
+        # Bs = np.array([[np.eye(D) /10. for _ in range(K)] for _ in range(M)])
+        Bs = np.array([[0.8 * random_rotation(D) for _ in range(K)] for _ in range(M)])
         Bs = np.moveaxis(Bs, 0, -1)
         self.Bs = Bs
 

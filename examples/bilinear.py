@@ -34,12 +34,12 @@ from ssm.util import random_rotation
 T = 1000   # number of time bins
 K = 1      # number of discrete states
 D = 2      # number of latent dimensions
-N = 10     # number of observed dimensions
+N = 20     # number of observed dimensions
 M = 2      # number of inputs
 
 # Make an LDS with somewhat interesting dynamics parameters
 true_lds = SLDS(N, K, D, M=M, dynamics="bilinear", emissions="gaussian")
-A0 = .8 * random_rotation(D, theta=np.pi/20)
+A0 = .7 * random_rotation(D, theta=np.pi/20)
 # S = (1 + 3 * npr.rand(D))
 S = np.arange(1, D+1)
 R = np.linalg.svd(npr.randn(D, D))[0] * S
@@ -47,15 +47,18 @@ A = R.dot(A0).dot(np.linalg.inv(R))
 b = npr.randn(D)
 true_lds.dynamics.As[0] = A
 true_lds.dynamics.bs[0] = b
+true_lds.emissions.Fs[0] = 0.0 * true_lds.emissions.Fs[0]
 
 # Sample
-us = 0.2 * npr.choice([0,1], (T, M), replace=True)
-z, x, y = true_lds.sample(T)
+# us = 0.2 * npr.choice([0,1], (T, M), replace=True)
+us = 0.2 * npr.randn(T, M)
+z, x, y = true_lds.sample(T, input=us)
 
 print("Fitting LDS with Laplace EM")
 lds = SLDS(N, K, D, M=M, dynamics="bilinear", emissions="gaussian")
-lds.initialize(y)
-q_lem_elbos, q_lem = lds.fit(y, method="laplace_em", variational_posterior="structured_meanfield",
+lds.emissions.Fs[0] = 0.0 * true_lds.emissions.Fs[0]
+lds.initialize(y, inputs=us)
+q_lem_elbos, q_lem = lds.fit(y, inputs=us, method="laplace_em", variational_posterior="structured_meanfield",
                              num_iters=20, initialize=False)
 # Get the posterior mean of the continuous states
 q_lem_x = q_lem.mean_continuous_states[0]
@@ -65,7 +68,7 @@ lr = LinearRegression(fit_intercept=True)
 lr.fit(q_lem_x, x)
 q_lem_x_trans = lr.predict(q_lem_x)
 # Smooth the data under the variational posterior
-q_lem_y = lds.smooth(q_lem_x, y)
+q_lem_y = lds.smooth(q_lem_x, y, input=us)
 
 # Plot the ELBOs
 plt.figure()

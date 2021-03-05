@@ -1810,7 +1810,7 @@ class BilinearObservations(AutoRegressiveObservations):
         # bilinear dynamics tensor
         # TODO come up with better initialization
         # Bs = np.array([[np.eye(D) /10. for _ in range(K)] for _ in range(M)])
-        Bs = np.array([[0.8 * random_rotation(D) for _ in range(K)] for _ in range(M)])
+        Bs = np.array([[0.8 * random_rotation(D, theta=np.pi/20) for _ in range(K)] for _ in range(M)])
         Bs = np.moveaxis(Bs, 0, -1)
         self.Bs = Bs
 
@@ -1844,12 +1844,16 @@ class BilinearObservations(AutoRegressiveObservations):
                 Al = A[:, l*D:(l + 1)*D]
                 mus_k_ar = mus_k_ar + np.dot(data[self.lags-l-1:-l-1], Al.T)
             mus_k_ar = mus_k_ar + b
-            
             # effect of bilinear dynamics
             # TODO - check this, see if need to shift input timing. 
-            mus_B = np.array([ np.dot(data[t, :], np.dot(B, input[t, :M])) for t in range(1, T)])
+            mus_B = np.array([ np.dot(data[t-1, :], np.dot(B, input[t, :M]).T) for t in range(1, T)])
             mus_k_ar = mus_k_ar + mus_B
                 
+            # these lines below are a test of whether the bilinear effect is done properly...
+            # the means should be the same 
+            # Bts = [np.dot(B, input[t]) for t in range(T)]
+            # mus_k_ar2 = np.array([A@data[t-1] + b + V@input[t] + Bts[t] @ data[t-1] for t in range(1, T)])
+
             # Append concatenated mean
             mus.append(np.vstack((mus_k_init, mus_k_ar)))
 
@@ -1867,13 +1871,10 @@ class BilinearObservations(AutoRegressiveObservations):
         J_ini = np.sum(Ez[0, :, None, None] * np.linalg.inv(self.Sigmas_init), axis=0)
 
         # first part is transition dynamics - goes to all terms except final one
-        # E_q(z) x_{t} A_{z_t+1}.T Sigma_{z_t+1}^{-1} A_{z_t+1} x_{t}
+        # E_q(z) x_{t} (A_{z_t+1} + B_{z_t+1}).T Sigma_{z_t+1}^{-1} (A_{z_t+1} + B_{z_t+1}) x_{t}
         inv_Sigmas = np.linalg.inv(self.Sigmas)
-        # dynamics terms is T x K x D x D
-        # here we just add the dynamics B at each time point to A
-        # TODO -> check if time indexing is correct
         dynamics_terms = np.array([[ (A+B).T @ inv_Sigma @ (A+B) for A, inv_Sigma, B in zip(self.As, inv_Sigmas, Bs)]
-                                     for Bs in Bts[:-1]])
+                                     for Bs in Bts[1:]]) # skip first term so block t corresponds with B_{t+1}
         
         J_dyn_11 = np.sum(Ez[1:,:,None,None] * dynamics_terms, axis=1) # (T-1 x D x D)
 
@@ -1882,10 +1883,9 @@ class BilinearObservations(AutoRegressiveObservations):
         J_dyn_22 = np.sum(Ez[1:,:,None,None] * inv_Sigmas[None,:], axis=1)
 
         # lower diagonal blocks are (T-1,D,D):
-        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} A_{z_t+1} x_t
-        # TODO - figure out correct time indexing for B
+        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} (A_{z_t+1} + B_{z_t+1}) x_t
         off_diag_terms = np.array([[ inv_Sigma @ (A+B) for A, inv_Sigma, B in zip(self.As, inv_Sigmas, Bs)]
-                                     for Bs in Bts[:-1]])
+                                     for Bs in Bts[1:]]) # skip first one again?
         J_dyn_21 = -1 * np.sum(Ez[1:,:,None,None] * off_diag_terms, axis=1)
 
         return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
@@ -1906,7 +1906,7 @@ class BilinearObservations(AutoRegressiveObservations):
                 
             # effect of bilinear dynamics
             Bt = np.dot(Bs[z], input[:self.M])
-            mu += np.dot(xhist[-1], Bt)
+            mu += Bt.dot(xhist[-1])
 
             S = np.linalg.cholesky(self.Sigmas[z]) if with_noise else 0
             return mu + np.dot(S, npr.randn(D))

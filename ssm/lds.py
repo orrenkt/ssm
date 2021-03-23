@@ -81,6 +81,7 @@ class SLDS(object):
             diagonal_t=obs.RobustAutoRegressiveDiagonalNoiseObservations,
             diagonal_studentst=obs.RobustAutoRegressiveDiagonalNoiseObservations,
             bilinear=obs.BilinearObservations,
+            higher_order=obs.EmbeddedHigherOrderAutoRegressiveObservations,
             )
 
         if isinstance(dynamics, str):
@@ -166,6 +167,7 @@ class SLDS(object):
                    num_init_iters=50,
                    discrete_state_init_method="random",
                    num_init_restarts=1):
+
         # First initialize the observation model
         self.emissions.initialize(datas, inputs, masks, tags)
 
@@ -464,10 +466,20 @@ class SLDS(object):
             neg_hessian_expected_log_dynamics_prob(Ez, x, input, x_mask, tag)
         J_transitions = self.transitions.\
             neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
-        J_dyn_11 += J_transitions
-
         J_obs = self.emissions.\
             neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
+
+        if type(self.dynamics) == obs.EmbeddedHigherOrderAutoRegressiveObservations:
+            # Modify transitions and emissions components of hessian for high-D embedded case.
+            # J_transitions is (T-1) x D x D
+            _ = (self.dynamics.lags-1)*self.D
+            pad = ((0,_), (0,_))
+            J_transitions = np.array([np.pad(J_tran, pad) for J_tran in J_transitions])
+            J_dyn_11 += J_transitions
+            J_obs = np.array([np.pad(J, pad) for J in J_obs])
+
+        else:
+            J_dyn_11 += J_transitions
 
         return J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs
 
@@ -555,6 +567,13 @@ class SLDS(object):
 
             J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = self.\
                 _laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
+
+            if type(self.dynamics) == obs.EmbeddedHigherOrderAutoRegressiveObservations:
+
+                # Construct embedded higher order x
+                raise ValueError('WIP!')
+                #x =
+
             h_ini, h_dyn_1, h_dyn_2, h_obs = \
                 self._laplace_neg_hessian_params_to_hs(x, J_ini, J_dyn_11,
                                               J_dyn_21, J_dyn_22, J_obs)
@@ -571,6 +590,11 @@ class SLDS(object):
 
         # Update the variational posterior params
         variational_posterior.continuous_state_params = continuous_state_params
+
+        import ipdb
+        # FOR DEBUG
+        variational_posterior.sample_continuous_states()
+        ipdb.set_trace()
 
     def _fit_laplace_em_params_update(self,
                                       variational_posterior,
@@ -942,12 +966,12 @@ class SLDS(object):
     #                 for particle in particles] # check input
 
     #         # Sample from p(z_t | x_{1:t-1}^n)
-    #         zt_particles = np.array([npr.choice(self.K, p=np.dot(posterior, P[-1])) 
+    #         zt_particles = np.array([npr.choice(self.K, p=np.dot(posterior, P[-1]))
     #                                     for posterior, P in zip(posteriors, Ps)])
 
     #         # 2. sample continuous state x_t^n | x_{t-1}^n, z_t^n
-    #         xt_particles = np.array([self.dynamics.sample_x(zt_particle, particle[-1:], input=input[t], 
-    #                                 tag=tag, with_noise=True).reshape((1,D)) 
+    #         xt_particles = np.array([self.dynamics.sample_x(zt_particle, particle[-1:], input=input[t],
+    #                                 tag=tag, with_noise=True).reshape((1,D))
     #                                 for zt_particle, particle in zip(zt_particles, particles)])
 
     #     # particle.append(xt_particle) # append sampled x to particle trajectory
@@ -964,7 +988,7 @@ class SLDS(object):
     #         current_particles = [np.append(particle, xt_particle, axis=0) for particle, xt_particle in zip(particles, xt_particles)]
     #         x_mask = np.ones_like(xt_particles[0], dtype=bool)
     #         Ps = [self.transitions.transition_matrix(xt_particle, input[t:t+1], x_mask, tag) for xt_particle in xt_particles] # recurrent transitions, check input
-    #         log_likes = [self.dynamics.log_likelihoods(current_particle[-2:], input[t-1:t+1], x_mask, tag) 
+    #         log_likes = [self.dynamics.log_likelihoods(current_particle[-2:], input[t-1:t+1], x_mask, tag)
     #                         for current_particle in current_particles]
 
     #         # alpha recursion
@@ -1055,6 +1079,7 @@ class LDS(SLDS):
             studentst=obs.RobustAutoRegressiveObservations,
             diagonal_t=obs.RobustAutoRegressiveDiagonalNoiseObservations,
             diagonal_studentst=obs.RobustAutoRegressiveDiagonalNoiseObservations,
+            bilinear=obs.BilinearObservations,
             )
 
         if isinstance(dynamics, str):

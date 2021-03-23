@@ -1104,6 +1104,48 @@ class AutoRegressiveObservations(_AutoRegressiveObservationsBase):
         return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
 
 
+class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
+    """
+    TBD.
+    """
+    def __init__(self, K, D, M=0, lags=1,
+                 l2_penalty_A=1e-8,
+                 l2_penalty_b=1e-8):
+
+        super(EmbeddedHigherOrderAutoRegressiveObservations, self).\
+            __init__(K, D, M=0, lags=lags,
+                     l2_penalty_A=l2_penalty_A,
+                     l2_penalty_b=l2_penalty_b)
+
+    def neg_hessian_expected_log_dynamics_prob(self, Ez, data, input, mask, tag=None):
+        assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
+
+        # initial distribution contributes a Gaussian term to first diagonal block
+        _ = (self.lags-1)*self.D
+        pad = ((0,0), (0,_), (0,_))
+        padrow = ((0,0), (0,_), (0,0))
+        J_ini = np.sum(Ez[0,:,None,None] * np.pad(np.linalg.inv(self.Sigmas_init), pad), axis=0)
+
+        # As is K x D x lags*D so is 'pre-stacked'
+
+        # first part is transition dynamics - goes to all terms except final one
+        # E_q(z) x_{t} A_{z_t+1}.T Sigma_{z_t+1}^{-1} A_{z_t+1} x_{t}
+        inv_Sigmas = np.linalg.inv(self.Sigmas)
+        dynamics_terms = np.array([A.T@inv_Sigma@A for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A^T Qinv A terms
+        J_dyn_11 = np.sum(Ez[1:,:,None,None] * dynamics_terms[None,:], axis=1)
+
+        # second part of diagonal blocks are inverse covariance matrices - goes to all but first time bin
+        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} x_{t+1}
+        J_dyn_22 = np.sum(Ez[1:,:,None,None] * np.pad(inv_Sigmas, pad)[None,:], axis=1)
+
+        # lower diagonal blocks are (T-1,D,D):
+        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} A_{z_t+1} x_t
+        off_diag_terms = np.array([inv_Sigma@A for A, inv_Sigma in zip(self.As, inv_Sigmas)])
+        J_dyn_21 = -1 * np.sum(Ez[1:,:,None,None] * np.pad(off_diag_terms, padrow)[None,:], axis=1)
+
+        return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
+
+
 class AutoRegressiveObservationsNoInput(AutoRegressiveObservations):
     """
     AutoRegressive observation model without the inputs.
@@ -1822,12 +1864,12 @@ class BilinearObservations(AutoRegressiveObservations):
     def params(self, value):
         self.Bs = value[-1]
         super(BilinearObservations, self.__class__).params.fset(self, value[:-1])
-    
+
     def _compute_mus(self, data, input, mask, tag):
         # assert np.all(mask), "ARHMM cannot handle missing data"
         K, M = self.K, self.M
         T, D = data.shape
-        
+
         # get bilinear dynamics parameters
         As, bs, Vs, mu0s, Bs = self.As, self.bs, self.Vs, self.mu_init, self.Bs
 
@@ -1835,6 +1877,7 @@ class BilinearObservations(AutoRegressiveObservations):
         mus = np.empty((K, T, D))
         mus = []
         for k, (A, b, V, mu0, B) in enumerate(zip(As, bs, Vs, mu0s, Bs)):
+
             # Initial condition
             mus_k_init = mu0 * np.ones((self.lags, D))
 
@@ -1844,13 +1887,14 @@ class BilinearObservations(AutoRegressiveObservations):
                 Al = A[:, l*D:(l + 1)*D]
                 mus_k_ar = mus_k_ar + np.dot(data[self.lags-l-1:-l-1], Al.T)
             mus_k_ar = mus_k_ar + b
+
             # effect of bilinear dynamics
-            # TODO - check this, see if need to shift input timing. 
+            # TODO - check this, see if need to shift input timing.
             mus_B = np.array([ np.dot(data[t-1, :], np.dot(B, input[t, :M]).T) for t in range(1, T)])
             mus_k_ar = mus_k_ar + mus_B
-                
+
             # these lines below are a test of whether the bilinear effect is done properly...
-            # the means should be the same 
+            # the means should be the same
             # Bts = [np.dot(B, input[t]) for t in range(T)]
             # mus_k_ar2 = np.array([A@data[t-1] + b + V@input[t] + Bts[t] @ data[t-1] for t in range(1, T)])
 
@@ -1858,15 +1902,15 @@ class BilinearObservations(AutoRegressiveObservations):
             mus.append(np.vstack((mus_k_init, mus_k_ar)))
 
         return np.array(mus)
-    
+
     def neg_hessian_expected_log_dynamics_prob(self, Ez, data, input, mask, tag=None):
         assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
         assert self.lags == 1, "Does not compute negative Hessian of autoregressive observations with lags > 1"
-        
+
         # compute time dependent effect of input on dynamics
         T, D = data.shape
         Bts = np.array([np.dot(self.Bs, input[t, :]) for t in range(T)]) # T x K x D x D
-        
+
         # initial distribution contributes a Gaussian term to first diagonal block
         J_ini = np.sum(Ez[0, :, None, None] * np.linalg.inv(self.Sigmas_init), axis=0)
 
@@ -1875,7 +1919,7 @@ class BilinearObservations(AutoRegressiveObservations):
         inv_Sigmas = np.linalg.inv(self.Sigmas)
         dynamics_terms = np.array([[ (A+B).T @ inv_Sigma @ (A+B) for A, inv_Sigma, B in zip(self.As, inv_Sigmas, Bs)]
                                      for Bs in Bts[1:]]) # skip first term so block t corresponds with B_{t+1}
-        
+
         J_dyn_11 = np.sum(Ez[1:,:,None,None] * dynamics_terms, axis=1) # (T-1 x D x D)
 
         # second part of diagonal blocks are inverse covariance matrices - goes to all but first time bin
@@ -1889,7 +1933,7 @@ class BilinearObservations(AutoRegressiveObservations):
         J_dyn_21 = -1 * np.sum(Ez[1:,:,None,None] * off_diag_terms, axis=1)
 
         return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
-    
+
     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
         D, As, bs, Vs, Bs = self.D, self.As, self.bs, self.Vs, self.Bs
 
@@ -1903,7 +1947,7 @@ class BilinearObservations(AutoRegressiveObservations):
             for l in range(self.lags):
                 Al = As[z][:,l*D:(l+1)*D]
                 mu += Al.dot(xhist[-l-1])
-                
+
             # effect of bilinear dynamics
             Bt = np.dot(Bs[z], input[:self.M])
             mu += Bt.dot(xhist[-1])

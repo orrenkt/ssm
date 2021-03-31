@@ -500,46 +500,19 @@ class SLDS(object):
 
     def _laplace_hessian_neg_expected_log_joint_banded(self, data, input, mask, tag, x, Ez, Ezzp1, scale=1):
 
-        inv_Sigmas = np.linalg.inv(self.observations.Sigmas)
-        inv_Sigmas_init = np.linalg.inv(self.observations.Sigmas_init)
+        T, D = np.shape(x)
+        x_mask = np.ones((T, D), dtype=bool)
 
-        # As is K x D x lags*D so is 'pre-stacked'
-        # banded hessian should be lags+1 x ? should flatten also..
+        # Start with dynamics
+        hessian_banded = \
+            self.dynamics.neg_hessian_expected_log_dynamics_prob_banded(Ez, x, input, x_mask, tag)
 
-        banded = []
-        for A, inv_Sigma, inv_Sigma_init in zip(self.observations.As, inv_Sigmas, inv_Sigmas_init):
-
-            # List of lagged As to make indexing easier
-            A_ = [A[:,i*self.D:(i+1)*self.D] for i in range(self.lags)]
-
-            #A0 = np.eye(
-
-            # Construct banded hessian
-            Hj = lambda j: np.sum([A_[i-j].T @ inv_Sigma @ A_[i]  for i in range(self.lags)])
-            hessian_banded = np.array([Hj(j) for j in range(self.lags+1)])
-
-            # Diagonal first element is just Q_0^-1
-            hessian_banded[0,:self.D,:] += inv_Sigma_init
-
-            # Last diagonal element is just Q^-1
-            hessian_banded[0,-self.D:,:] = inv_Sigma
-
-            banded.append(hessian_banded)
-
-        banded = np.array(banded)
-
-        # Shapes are wrong, but need to sum across discrete latents
-        hessian_banded = np.sum(Ez[1:,:,None,None] * banded[None,:], axis=1)
-
+        # Add discrete latent and emissions contributions
         J_transitions = self.transitions.\
             neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
         J_obs = self.emissions.\
             neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
-
-        # Add the discrete state and emissions components to diagonal?
-        # Shapes probably wrong...
-        hessian_banded[0,:,:] += J_transitions
-        hessian_banded[0,:,:] += J_obs
+        hessian_banded += J_transitions + J_obs
 
         # Return the scaled negative hessian, which is positive definite
         return hessian_banded / scale

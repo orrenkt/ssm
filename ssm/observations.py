@@ -1145,6 +1145,69 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
 
         return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
 
+    def neg_hessian_expected_log_dynamics_prob_banded(self, Ez, data, input, mask, tag=None):
+        """DO WE NEED THIS and should it be here?"""
+        assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
+
+        inv_Sigmas = np.linalg.inv(self.Sigmas)
+        inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
+
+        # ----- Diagonal -----
+
+        # Init diagonal
+        diag = np.zeros((T,K,D,D))
+
+        # Change first block
+        diag[0,:,:,:] = inv_Sigmas_init
+
+        # Standard diag form
+        diag[1:,:,:,:] = Sigmas_init
+
+        for k, A, inv_Sigmas in enumerate(self.As, self.inv_Sigmas):
+
+            # List of lagged As to make indexing easier
+            A_ = [A[:,i*self.D:(i+1)*self.D] for i in range(self.lags)]
+            diag[:-self.lags,k,:,:] += np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(1,self.lags)])
+
+            # Change last tau blocks
+            for j in self.lags:
+
+        # ----- Bands -----
+
+        # Create off diag blocks
+        for j in self.lags:
+
+
+            # Change last element
+
+            # zero pad
+
+
+            Hj = lambda j: np.sum([A_[i-j].T @ inv_Sigma @ A_[i]  for i in range(self.lags)])
+            hessian_banded = np.array([Hj(j) for j in range(self.lags+1)])
+
+
+
+        # initial distribution contributes a Gaussian term to first diagonal block
+        J_ini = np.sum(Ez[0, :, None, None] * np.linalg.inv(self.Sigmas_init), axis=0)
+
+        # first part is transition dynamics - goes to all terms except final one
+        # E_q(z) x_{t} A_{z_t+1}.T Sigma_{z_t+1}^{-1} A_{z_t+1} x_{t}
+        inv_Sigmas = np.linalg.inv(self.Sigmas)
+        dynamics_terms = np.array([A.T@inv_Sigma@A for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A^T Qinv A terms
+        J_dyn_11 = np.sum(Ez[1:,:,None,None] * dynamics_terms[None,:], axis=1)
+
+        # second part of diagonal blocks are inverse covariance matrices - goes to all but first time bin
+        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} x_{t+1}
+        J_dyn_22 = np.sum(Ez[1:,:,None,None] * inv_Sigmas[None,:], axis=1)
+
+        # lower diagonal blocks are (T-1,D,D):
+        # E_q(z) x_{t+1} Sigma_{z_t+1}^{-1} A_{z_t+1} x_t
+        off_diag_terms = np.array([inv_Sigma@A for A, inv_Sigma in zip(self.As, inv_Sigmas)])
+        J_dyn_21 = -1 * np.sum(Ez[1:,:,None,None] * off_diag_terms[None,:], axis=1)
+
+        return J_ini, J_dyn_11, J_dyn_21, J_dyn_22
+
 
 class AutoRegressiveObservationsNoInput(AutoRegressiveObservations):
     """

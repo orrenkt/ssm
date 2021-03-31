@@ -474,7 +474,7 @@ class SLDS(object):
             # J_transitions is (T-1) x D x D
             _ = (self.dynamics.lags-1)*self.D
             pad = ((0,_), (0,_))
-            J_transitions = np.array([np.pad(J_tran, pad) for J_tran in J_transitions])
+            J_transitions = np.array([np.pad(J, pad) for J in J_transitions])
             J_dyn_11 += J_transitions
             J_obs = np.array([np.pad(J, pad) for J in J_obs])
 
@@ -484,6 +484,7 @@ class SLDS(object):
         return J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs
 
     def _laplace_hessian_neg_expected_log_joint(self, data, input, mask, tag, x, Ez, Ezzp1, scale=1):
+
         J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = \
             self._laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
 
@@ -496,6 +497,52 @@ class SLDS(object):
 
         # Return the scaled negative hessian, which is positive definite
         return hessian_diag / scale, hessian_lower_diag / scale
+
+    def _laplace_hessian_neg_expected_log_joint_banded(self, data, input, mask, tag, x, Ez, Ezzp1, scale=1):
+
+        inv_Sigmas = np.linalg.inv(self.observations.Sigmas)
+        inv_Sigmas_init = np.linalg.inv(self.observations.Sigmas_init)
+
+        # As is K x D x lags*D so is 'pre-stacked'
+        # banded hessian should be lags+1 x ? should flatten also..
+
+        banded = []
+        for A, inv_Sigma, inv_Sigma_init in zip(self.observations.As, inv_Sigmas, inv_Sigmas_init):
+
+            # List of lagged As to make indexing easier
+            A_ = [A[:,i*self.D:(i+1)*self.D] for i in range(self.lags)]
+
+            #A0 = np.eye(
+
+            # Construct banded hessian
+            Hj = lambda j: np.sum([A_[i-j].T @ inv_Sigma @ A_[i]  for i in range(self.lags)])
+            hessian_banded = np.array([Hj(j) for j in range(self.lags+1)])
+
+            # Diagonal first element is just Q_0^-1
+            hessian_banded[0,:self.D,:] += inv_Sigma_init
+
+            # Last diagonal element is just Q^-1
+            hessian_banded[0,-self.D:,:] = inv_Sigma
+
+            banded.append(hessian_banded)
+
+        banded = np.array(banded)
+
+        # Shapes are wrong, but need to sum across discrete latents
+        hessian_banded = np.sum(Ez[1:,:,None,None] * banded[None,:], axis=1)
+
+        J_transitions = self.transitions.\
+            neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
+        J_obs = self.emissions.\
+            neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
+
+        # Add the discrete state and emissions components to diagonal?
+        # Shapes probably wrong...
+        hessian_banded[0,:,:] += J_transitions
+        hessian_banded[0,:,:] += J_obs
+
+        # Return the scaled negative hessian, which is positive definite
+        return hessian_banded / scale
 
     def _laplace_neg_hessian_params_to_hs(self,
                                           x,
@@ -551,9 +598,18 @@ class SLDS(object):
             def _hess_obj(x): return self._laplace_hessian_neg_expected_log_joint(x=x, **kwargs)
 
             if continuous_optimizer == "newton":
-                x = newtons_method_block_tridiag_hessian(
-                    x0, lambda x: _objective(x, None), _grad_obj, _hess_obj,
-                    tolerance=continuous_tolerance, maxiter=continuous_maxiter)
+
+                if type(self.dynamics) == obs.HigherOrderAutoRegressiveObservations:
+
+                    def _hess_obj(x): return self._laplace_hessian_neg_expected_log_joint_banded(x=x, **kwargs)
+                    x = newtons_method_banded_hessian(
+                        x0, lambda x: _objective(x, None), _grad_obj, _hess_obj,
+                        tolerance=continuous_tolerance, maxiter=continuous_maxiter)
+
+                else:
+                    x = newtons_method_block_tridiag_hessian(
+                        x0, lambda x: _objective(x, None), _grad_obj, _hess_obj,
+                        tolerance=continuous_tolerance, maxiter=continuous_maxiter)
 
             elif continuous_optimizer  == "lbfgs":
                 x = lbfgs(_objective, x0, num_iters=continuous_maxiter,

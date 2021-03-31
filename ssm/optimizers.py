@@ -191,6 +191,39 @@ def newtons_method_block_tridiag_hessian(
     return x
 
 
+# Special optimizer for function with symmetric banded hessian
+def newtons_method_banded_hessian(
+    x0, obj, grad_func, hess_func,
+    tolerance=1e-4, maxiter=100):
+    """
+    Newton's method to minimize a positive definite function with a
+    banded Hessian matrix. Ref is for tridiagonal?
+    Algorithm 9.5, Boyd & Vandenberghe, 2004.
+    """
+    x = x0
+    is_converged = False
+    count = 0
+    while not is_converged:
+        H_banded = hess_func(x)
+        g = grad_func(x)
+        dx = -1.0 * solve_symm_banded(H_banded, g)
+        lambdasq = np.dot(g.ravel(), -1.0*dx.ravel())
+        if lambdasq / 2.0 <= tolerance:
+            is_converged = True
+            break
+        stepsize = backtracking_line_search(x, dx, obj, g)
+        x = x + stepsize * dx
+        count += 1
+        if count > maxiter:
+            break
+
+    if not is_converged:
+        warn("Newton's method failed to converge in {} iterations. "
+             "Final mean abs(dx): {}".format(maxiter, np.mean(np.abs(dx))))
+
+    return x
+
+
 def backtracking_line_search(x0, dx, obj, g, stepsize = 1.0, min_stepsize=1e-8,
                              alpha=0.2, beta=0.7):
     """

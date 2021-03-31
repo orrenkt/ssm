@@ -237,6 +237,11 @@ def blocks_to_full(J_diag, J_lower_diag):
 # Solve and multiply symmetric block tridiagonal systems
 def solve_symm_block_tridiag(J_diag, J_lower_diag, v):
     J_banded = blocks_to_bands(J_diag, J_lower_diag, lower=True)
+    return solve_symm_banded(J_banded, v)
+
+
+# Solve and multiply symmetric block tridiagonal systems
+def solve_symm_banded(J_banded, v):
     x_flat = solveh_banded(J_banded, np.ravel(v), lower=True)
     return np.reshape(x_flat, v.shape)
 

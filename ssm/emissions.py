@@ -108,13 +108,18 @@ class _LinearEmissions(Emissions):
     where C is an emission matrix, d is a bias, F an input matrix,
     and u is an input.
     """
-    def __init__(self, N, K, D, M=0, single_subspace=True):
+    def __init__(self, N, K, D, M=0, single_subspace=True, F_zero_flag=False):
         super(_LinearEmissions, self).__init__(N, K, D, M=M, single_subspace=single_subspace)
+
+        self.F_zero_flag = F_zero_flag
 
         # Initialize linear layer.  Set _Cs to be private so that it can be
         # changed in subclasses.
         self._Cs = npr.randn(1, N, D) if single_subspace else npr.randn(K, N, D)
-        self.Fs = npr.randn(1, N, M) if single_subspace else npr.randn(K, N, M)
+        if self.F_zero_flag:
+            self.Fs = np.zeros((1, N, M)) if single_subspace else np.zeros((K, N, M))
+        else:
+            self.Fs = npr.randn(1, N, M) if single_subspace else npr.randn(K, N, M)
         self.ds = npr.randn(1, N) if single_subspace else npr.randn(K, N)
 
     @property
@@ -129,11 +134,17 @@ class _LinearEmissions(Emissions):
 
     @property
     def params(self):
-        return self.Cs, self.Fs, self.ds
+        if self.F_zero_flag:
+            return self.Cs, self.ds
+        else:
+            return self.Cs, self.Fs, self.ds
 
     @params.setter
     def params(self, value):
-        self.Cs, self.Fs, self.ds = value
+        if self.F_zero_flag:
+            self.Cs, self.ds = value
+        else:
+            self.Cs, self.Fs, self.ds = value
 
     def permute(self, perm):
         if not self.single_subspace:
@@ -214,14 +225,19 @@ class _OrthogonalLinearEmissions(_LinearEmissions):
     https://pubs.acs.org/doi/pdf/10.1021/acs.jpca.5b02015
     for a derivation of the rational Cayley transform.
     """
-    def __init__(self, N, K, D, M=0, single_subspace=True):
+    def __init__(self, N, K, D, M=0, single_subspace=True, F_zero_flag=False):
         super(_OrthogonalLinearEmissions, self).__init__(N, K, D, M=M, single_subspace=single_subspace)
+
+        self.F_zero_flag = F_zero_flag
 
         # Initialize linear layer
         assert N > D
         self._Ms = npr.randn(1, D, D) if single_subspace else npr.randn(K, D, D)
         self._As = npr.randn(1, N-D, D) if single_subspace else npr.randn(K, N-D, D)
-        self.Fs = npr.randn(1, N, M) if single_subspace else npr.randn(K, N, M)
+        if self.F_zero_flag:
+            self.Fs = np.zeros((1, N, M)) if single_subspace else np.zeros((K, N, M))
+        else:
+            self.Fs = npr.randn(1, N, M) if single_subspace else npr.randn(K, N, M)
         self.ds = npr.randn(1, N) if single_subspace else npr.randn(K, N)
 
         # Set the emission matrix to be a random orthogonal matrix
@@ -268,11 +284,17 @@ class _OrthogonalLinearEmissions(_LinearEmissions):
 
     @property
     def params(self):
-        return self._As, self._Ms, self.Fs, self.ds
+        if self.F_zero_flag:
+            return self._As, self._Ms, self.ds
+        else:
+            return self._As, self._Ms, self.Fs, self.ds
 
     @params.setter
     def params(self, value):
-        self._As, self._Ms, self.Fs, self.ds = value
+        if self.F_zero_flag:
+            self._As, self._Ms, self.ds = value
+        else:
+            self._As, self._Ms, self.Fs, self.ds = value
 
     def permute(self, perm):
         if not self.single_subspace:

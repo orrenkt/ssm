@@ -1155,10 +1155,10 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
 
         # self.As is K x D x lags*D
-        # Make List of lagged As to make indexing easier. As_ is K x lags x D x D
+        # Make list of lagged As to make indexing easier. As_ is K x lags x D x D
         As_ = [[As[i,:,j*self.D:(j+1)*self.D] for j in range(self.lags)] for i in len(self.As)]
 
-        # We prepend A_0 = I, A_-i<0 = 0 for i in lags
+        # Prepend A_0 = I, A_-i<0 = 0 for i in lags to allow us zero and negative indicies
         A0 = np.eye(self.As[0].shape[0])
         Aneg = np.zeros_like(self.As[0])
         As_ = [[Aneg for _ in range(self.lags)] + [A0] + As for As in As_]
@@ -1184,8 +1184,9 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         hessian_banded[0,0,:,:,:] += inv_Sigmas_init - inv_Sigmas
 
         # Last j=0:tau diagonal elements have only j+1 terms
-        for j in range(self.lags):
-            hessian_banded[0,-j,:,:,:] = np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(0,j+1)])
+        for k, A_ in enumerate(As):
+            for j in range(self.lags):
+                hessian_banded[0,-j,k,:,:] = np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(0,j+1)])
 
         # Compute expectation wrt discrete states z by taking weighted sum over K
         hessian_banded = np.sum(Ez[None,1:,:,None,None] * hessian_banded[:,1:,:,:,:], axis=2)

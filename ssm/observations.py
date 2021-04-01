@@ -1184,7 +1184,7 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         hessian_banded[0,0,:,:,:] += inv_Sigmas_init - inv_Sigmas
 
         # Last j=0:tau diagonal elements have only j+1 terms
-        for k, A_ in enumerate(As):
+        for k, A_ in enumerate(As_):
             for j in range(self.lags):
                 hessian_banded[0,-j,k,:,:] = np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(0,j+1)])
 

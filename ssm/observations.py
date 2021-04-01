@@ -1149,28 +1149,33 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         """DO WE NEED THIS and should it be here?"""
         assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
 
+        T, D = data.shape
+        K = Ez.shape[-1]
+
         inv_Sigmas = np.linalg.inv(self.Sigmas)
         inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
 
         # ----- Diagonal -----
 
         # Init diagonal
-        diag = np.zeros((T,K,D,D))
-
+        diag_blocks = np.zeros((T,D,D))
         # Change first block
-        diag[0,:,:,:] = inv_Sigmas_init
-
-        # Standard diag form
-        diag[1:,:,:,:] = Sigmas_init
-
-        for k, A, inv_Sigmas in enumerate(self.As, self.inv_Sigmas):
-
-            # List of lagged As to make indexing easier
-            A_ = [A[:,i*self.D:(i+1)*self.D] for i in range(self.lags)]
-            diag[:-self.lags,k,:,:] += np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(1,self.lags)])
-
-            # Change last tau blocks
-            for j in self.lags:
+        diag[0] = np.sum(Ez[0, :, None, None] * np.linalg.inv(self.Sigmas_init), axis=0)
+        diag[1:] = np.sum(Ez[1:,:,None,None] * inv_Sigmas[None,:], axis=1)
+        # these dynamics terms go to all but last tau blocks 
+        dynamics_terms = np.array([
+            np.sum(A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D] 
+                   for i in range(self.lags), axis=0)
+                   for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A^T Qinv A terms
+        # marginalize over discrete state 
+        diag[:-self.lags] = np.sum(Ez[:-self.lags,:,None,None] * dynamics_terms[None,:], axis=1)
+        # fill in last tau blocks below
+        for l in range(self.lags):
+            dynamics_term = np.array([
+                np.sum(A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D] 
+                       for i in range(l), axis=0)
+                       for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A
+            diag[-l] = np.sum(Ez[-l, :, None, None] * dynamics_term, axis=0)
 
         # ----- Bands -----
 

@@ -1176,16 +1176,16 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         T, D = data.shape
         hessian_banded = np.tile(hessian_band_elements, (1, T, self.K, 1, 1))
 
-        # hessian_banded is now tau+1 x T x K x D x D
+        # hessian_banded is now lags+1 x T x K x D x D
 
         # Exception elements are the first timepoint of the diag, and last tau-j elements of each band.
 
         # First element of diag uses Q_0^-1 instead of Q^-1, so we add it and subtract Q^-1
         hessian_banded[0,0,:,:,:] += inv_Sigmas_init - inv_Sigmas
 
-        # Last tau elements have fewer things in the sum... should probably go into the formula above.
-
-        # Need to work this out
+        # Last j=0:tau diagonal elements have only j+1 terms
+        for j in range(self.lags):
+            hessian_banded[0,-j,:,:,:] = np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(0,j+1)])
 
         # Compute expectation wrt discrete states z by taking weighted sum over K
         hessian_banded = np.sum(Ez[None,1:,:,None,None] * hessian_banded[:,1:,:,:,:], axis=2)

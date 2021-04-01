@@ -1155,35 +1155,35 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
 
         # self.As is K x D x lags*D
-        # Make list of lagged As to make indexing easier. As_ is K x lags x D x D
+        # List of lagged As to make indexing easier. As_ is K x lags x D x D
         As_ = [[As[i,:,j*self.D:(j+1)*self.D] for j in range(self.lags)] for i in len(self.As)]
 
-        # Prepend A_0 = I, A_-i<0 = 0 for i in lags to allow us zero and negative indicies
+        # Prepend A_0 = I, A_-i<0 = 0 for i in lags to allow zero and negative indicies
         A0 = np.eye(self.As[0].shape[0])
         Aneg = np.zeros_like(self.As[0])
         As_ = [[Aneg for _ in range(self.lags)] + [A0] + As for As in As_]
 
         # As_ is now K x (2*lags)+1 x D x D
 
-        # Create the lags+1 x DxD block band elements (all the same formula with a few exceptions)
-        # Note we are iterating starting from self.lags to account for negative indicies
+        # Create the lags+1 x DxD block band elements (all same formula except for few exceptions in diag)
+        # Note we iterate starting from self.lags to account for negative indicies
         Hj = lambda j: np.sum([A_[i-j].T @ inv_Sigma @ A_[i] for i in range(self.lags, self.lags*2)])
         hessian_band_elements = np.array([Hj(j) for j in range(self.lags, (self.lags*2)+1)])
 
         # hessian_band_elements is now lags+1 x D x D
 
-        # Copy out over to all timepoints -- each band is of size T x K x D x D, where K indexes the discrete state
+        # Tile for all timepoints. Each band is now T x K x D x D, where K indexes discrete state
         T, D = data.shape
         hessian_banded = np.tile(hessian_band_elements, (1, T, self.K, 1, 1))
 
         # hessian_banded is now lags+1 x T x K x D x D
 
-        # Exception elements are the first timepoint of the diag, and last tau-j elements of each band.
+        # Exceptions are the first timepoint and last tau blocks of diagonal.
 
-        # First element of diag uses Q_0^-1 instead of Q^-1, so we add it and subtract Q^-1
+        # First block of diag uses Q_0^-1 instead of Q^-1, so we add it and subtract Q^-1
         hessian_banded[0,0,:,:,:] += inv_Sigmas_init - inv_Sigmas
 
-        # Last j=0:tau diagonal elements have only j+1 terms
+        # Last j=0:tau diagonal blocks have only j+1 terms
         for k, A_ in enumerate(As_):
             for j in range(self.lags):
                 hessian_banded[0,-j,k,:,:] = np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(0,j+1)])

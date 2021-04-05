@@ -14,7 +14,8 @@ from autograd.misc import flatten
 from autograd.wrap_util import wraps
 
 from scipy.optimize import minimize
-from ssm.primitives import solve_symm_block_tridiag
+from ssm.primitives import solve_symm_block_tridiag, solve_symm_banded
+
 
 def convex_combination(curr, target, alpha):
     """
@@ -55,6 +56,7 @@ def sgd_step(value_and_grad, x, itr, state=None, step_size=0.1, mass=0.9):
     velocity = mass * velocity - (1.0 - mass) * g
     x = x + step_size * velocity
     return x, val, g, velocity
+
 
 @unflatten_optimizer_step
 def rmsprop_step(value_and_grad, x, itr, state=None, step_size=0.1, gamma=0.9, eps=10**-8):
@@ -205,7 +207,9 @@ def newtons_method_banded_hessian(
     count = 0
     while not is_converged:
         H_banded = hess_func(x)
+        #H_diag, H_lower_diag = hess_func(x)
         g = grad_func(x)
+        #dx = -1.0 * solve_symm_block_tridiag(H_diag, H_lower_diag, g)
         dx = -1.0 * solve_symm_banded(H_banded, g)
         lambdasq = np.dot(g.ravel(), -1.0*dx.ravel())
         if lambdasq / 2.0 <= tolerance:

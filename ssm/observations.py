@@ -1151,17 +1151,33 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         """
         assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
 
+        T, D = data.shape
+        K = Ez.shape[-1]
+
         inv_Sigmas = np.linalg.inv(self.Sigmas)
         inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
 
-        # self.As is K x D x lags*D
-        # List of lagged As to make indexing easier. As_ is K x lags x D x D
-        As_ = [[As[i,:,j*self.D:(j+1)*self.D] for j in range(self.lags)] for i in len(self.As)]
+        # ----- Diagonal -----
 
-        # Prepend A_0 = I, A_-i<0 = 0 for i in lags to allow zero and negative indicies
-        A0 = np.eye(self.As[0].shape[0])
-        Aneg = np.zeros_like(self.As[0])
-        As_ = [[Aneg for _ in range(self.lags)] + [A0] + As for As in As_]
+        # Init diagonal
+        diag_blocks = np.zeros((T,D,D))
+        # Change first block
+        diag[0] = np.sum(Ez[0, :, None, None] * np.linalg.inv(self.Sigmas_init), axis=0)
+        diag[1:] = np.sum(Ez[1:,:,None,None] * inv_Sigmas[None,:], axis=1)
+        # these dynamics terms go to all but last tau blocks
+        dynamics_terms = np.array([
+            np.sum(A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
+                   for i in range(self.lags), axis=0)
+                   for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A^T Qinv A terms
+        # marginalize over discrete state
+        diag[:-self.lags] = np.sum(Ez[:-self.lags,:,None,None] * dynamics_terms[None,:], axis=1)
+        # fill in last tau blocks below
+        for l in range(self.lags):
+            dynamics_term = np.array([
+                np.sum(A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
+                       for i in range(l), axis=0)
+                       for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A
+            diag[-l] = np.sum(Ez[-l, :, None, None] * dynamics_term, axis=0)
 
         # As_ is now K x (2*lags)+1 x D x D
 

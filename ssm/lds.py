@@ -7,7 +7,8 @@ import autograd.numpy.random as npr
 from autograd import value_and_grad, grad
 
 from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
-    convex_combination, newtons_method_block_tridiag_hessian
+    convex_combination, newtons_method_block_tridiag_hessian, \
+    newtons_method_banded_hessian
 from ssm.primitives import hmm_normalizer
 from ssm.messages import hmm_expected_states, viterbi
 from ssm.util import ensure_args_are_lists, \
@@ -500,6 +501,7 @@ class SLDS(object):
 
     def _laplace_hessian_neg_expected_log_joint_banded(self, data, input, mask, tag, x, Ez, Ezzp1, scale=1):
 
+<<<<<<< HEAD
         T, D = np.shape(x)
         x_mask = np.ones((T, D), dtype=bool)
 
@@ -508,14 +510,37 @@ class SLDS(object):
             self.dynamics.neg_hessian_expected_log_dynamics_prob_banded(Ez, x, input, x_mask, tag)
 
         # Add discrete latent and emissions contributions
+=======
+        # Add discrete latent and emissions contributions to diagonal band
+>>>>>>> tmp
         J_transitions = self.transitions.\
             neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
         J_obs = self.emissions.\
             neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
+<<<<<<< HEAD
         hessian_banded += J_transitions + J_obs
+=======
+        hessian_banded[0,1:,:] += J_transitions
+        hessian_banded[0,:] += J_obs
 
-        # Return the scaled negative hessian, which is positive definite
+        # need to test that this is the same is regular diag and offdiag, but using regular not AR class..
+        #kwargs = dict(data=data, input=input, mask=mask, tag=tag, Ez=Ez, Ezzp1=Ezzp1, scale=scale)
+        #hess_diag, hess_lower_diag = self._laplace_hessian_neg_expected_log_joint(x=x, **kwargs)
+        #print('hess', hess_diag.shape, hessian_banded.shape)
+        #print(hess_diag[0,:2,:2])
+        #print(hessian_banded[0,:2,:2,:2])
+>>>>>>> tmp
+
+        # We reshape to (lags+1)*D x T*D for solvh_banded. NOTE: double check this works as expected!
+        hessian_banded = hessian_banded.reshape((self.dynamics.lags+1)*D, T*D)
+
+        #hessian_banded = hessian_banded[0,:]
+        #hessian_banded = hessian_banded.reshape((1)*D, T*D)
+
+        # Return scaled negative hessian
         return hessian_banded / scale
+
+        #return hessian_banded[0,:], hessian_banded[1,:]
 
     def _laplace_neg_hessian_params_to_hs(self,
                                           x,
@@ -572,7 +597,7 @@ class SLDS(object):
 
             if continuous_optimizer == "newton":
 
-                if type(self.dynamics) == obs.HigherOrderAutoRegressiveObservations:
+                if type(self.dynamics) == obs.EmbeddedHigherOrderAutoRegressiveObservations:
 
                     def _hess_obj(x): return self._laplace_hessian_neg_expected_log_joint_banded(x=x, **kwargs)
                     x = newtons_method_banded_hessian(
@@ -597,10 +622,10 @@ class SLDS(object):
             J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = self.\
                 _laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
 
-            if type(self.dynamics) == obs.EmbeddedHigherOrderAutoRegressiveObservations:
+            #if type(self.dynamics) == obs.EmbeddedHigherOrderAutoRegressiveObservations:
 
                 # Construct embedded higher order x
-                raise ValueError('WIP!')
+            #    raise ValueError('WIP!')
                 #x =
 
             h_ini, h_dyn_1, h_dyn_2, h_obs = \

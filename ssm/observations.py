@@ -1161,52 +1161,52 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
 
         # Init diagonal
         diag_blocks = np.zeros((T,D,D))
+
         # Change first block
-        diag[0] = np.sum(Ez[0, :, None, None] * np.linalg.inv(self.Sigmas_init), axis=0)
+        diag[0] = np.sum(Ez[0, :, None, None] * inv_Sigmas_init, axis=0)
         diag[1:] = np.sum(Ez[1:,:,None,None] * inv_Sigmas[None,:], axis=1)
+
         # these dynamics terms go to all but last tau blocks
         dynamics_terms = np.array([
-            np.sum(A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
-                   for i in range(self.lags), axis=0)
+            np.sum([A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
+                    for i in range(self.lags), axis=0)
                    for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A^T Qinv A terms
+
         # marginalize over discrete state
         diag[:-self.lags] = np.sum(Ez[:-self.lags,:,None,None] * dynamics_terms[None,:], axis=1)
+
         # fill in last tau blocks below
         for l in range(self.lags):
             dynamics_term = np.array([
-                np.sum(A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
-                       for i in range(l), axis=0)
+                np.sum([A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
+                        for i in range(l), axis=0)
                        for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A
             diag[-l] = np.sum(Ez[-l, :, None, None] * dynamics_term, axis=0)
 
-        # As_ is now K x (2*lags)+1 x D x D
+        # ----- Off-Diag Bands -----
 
-        # Create the lags+1 x DxD block band elements (all same formula except for few exceptions in diag)
-        # Note we iterate starting from self.lags to account for negative indicies
-        Hj = lambda j: np.sum([A_[i-j].T @ inv_Sigma @ A_[i] for i in range(self.lags, self.lags*2)])
-        hessian_band_elements = np.array([Hj(j) for j in range(self.lags, (self.lags*2)+1)])
+        # Make list of lagged As for easy indexing, and prepend A_0 = I
+        A0 = np.eye(D)
+        As_ = [[A0] + [A[:,j*self.D:(j+1)*self.D] for j in range(self.lags)]
+               for A in self.As]
 
-        # hessian_band_elements is now lags+1 x D x D
+	# Formula for hessian band elements. offdiag_elements is lags x K x D x D
+        Hj = lambda j: [np.sum([A_[i-j].T @ inv_Sigma @ A_[i]
+                                for i in range(j, self.lags+1)], axis=0)
+                        for A_, inv_Sigma in zip(As_, inv_Sigmas)]
+        offdiag_elements = np.array([Hj(j) for j in range(1, self.lags+1)])
 
-        # Tile for all timepoints. Each band is now T x K x D x D, where K indexes discrete state
-        T, D = data.shape
-        hessian_banded = np.tile(hessian_band_elements, (1, T, self.K, 1, 1))
+	# Marginalize over discrete state (broadcast over time). offdiag is lags x T x D x D
+        offdiag = np.array([np.sum(Ez[:,:,None,None] * band_elements[None,:,:,:], axis=1)
+                           for i, band_elements in enumerate(offdiag_elements)])
 
-        # hessian_banded is now lags+1 x T x K x D x D
+        # Each progressive offdiag band is actually one timepoint shorter, so we replace with zeros
+        for j in range(self.lags):
+            offdiag[j,-(j+1):,:,:] = 0
+            #print(offdiag[j,:,:,:].sum(axis=-1))
 
-        # Exceptions are the first timepoint and last tau blocks of diagonal.
-
-        # First block of diag uses Q_0^-1 instead of Q^-1, so we add it and subtract Q^-1
-        hessian_banded[0,0,:,:,:] += inv_Sigmas_init - inv_Sigmas
-
-        # Last j=0:tau diagonal blocks have only j+1 terms
-        for k, A_ in enumerate(As_):
-            for j in range(self.lags):
-                hessian_banded[0,-j,k,:,:] = np.sum([A_[i].T @ inv_Sigma @ A_[i] for i in range(0,j+1)])
-
-        # Compute expectation wrt discrete states z by taking weighted sum over K
-        hessian_banded = np.sum(Ez[None,1:,:,None,None] * hessian_banded[:,1:,:,:,:], axis=2)
-
+        # Final hessian_banded should be lags+1 x T x D x D.
+        hessian_banded = np.vstack((diag[None,:], offdiag))
         return hessian_banded
 
 

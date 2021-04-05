@@ -505,27 +505,30 @@ class SLDS(object):
         x_mask = np.ones((T, D), dtype=bool)
 
         # Start with dynamics
-        hessian_banded = \
+        hessian_diag, hessian_off_diag = \
             self.dynamics.neg_hessian_expected_log_dynamics_prob_banded(Ez, x, input, x_mask, tag)
-
         # Add discrete latent and emissions contributions
         J_transitions = self.transitions.\
             neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
         J_obs = self.emissions.\
             neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
-        hessian_banded[0,1:,:] += J_transitions
-        hessian_banded[0,:] += J_obs
-
+        # hessian_banded[0,:-1,:] += J_transitions
+        # hessian_banded[0,:] += J_obs
+        hessian_diag[:-1] += J_transitions 
+        hessian_diag += J_obs
         # need to test that this is the same is regular diag and offdiag, but using regular not AR class..
         #kwargs = dict(data=data, input=input, mask=mask, tag=tag, Ez=Ez, Ezzp1=Ezzp1, scale=scale)
         #hess_diag, hess_lower_diag = self._laplace_hessian_neg_expected_log_joint(x=x, **kwargs)
         #print('hess', hess_diag.shape, hessian_banded.shape)
         #print(hess_diag[0,:2,:2])
         #print(hessian_banded[0,:2,:2,:2])
+        hessian_banded = [hessian_diag,] + hessian_off_diag 
 
         # We reshape to (lags+1)*D x T*D for solvh_banded. NOTE: double check this works as expected!
-        hessian_banded = hessian_banded.reshape((self.dynamics.lags+1)*D, T*D)
-
+        # hessian_banded = hessian_banded.reshape((self.dynamics.lags+1)*D, T*D)
+        from ssm.primitives import blocks_to_bands2
+        hessian_banded = blocks_to_bands2(list(hessian_banded)) # list may not be necessary
+    
         #hessian_banded = hessian_banded[0,:]
         #hessian_banded = hessian_banded.reshape((1)*D, T*D)
 
@@ -611,6 +614,8 @@ class SLDS(object):
             # Evaluate the Hessian at the mode
             assert np.all(np.isfinite(_objective(x, -1)))
 
+            # import ipdb; ipdb.set_trace()
+
             J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = self.\
                 _laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
 
@@ -637,7 +642,6 @@ class SLDS(object):
         # Update the variational posterior params
         variational_posterior.continuous_state_params = continuous_state_params
 
-        import ipdb
         # FOR DEBUG
         variational_posterior.sample_continuous_states()
         ipdb.set_trace()

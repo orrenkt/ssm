@@ -1157,10 +1157,10 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         inv_Sigmas = np.linalg.inv(self.Sigmas)
         inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
 
-        # ----- Diagonal -----
+        # ----- Diagonal blocks -----
 
         # Init diagonal
-        diag_blocks = np.zeros((T,D,D))
+        diag = np.zeros((T,D,D))
 
         # Change first block
         diag[0] = np.sum(Ez[0, :, None, None] * inv_Sigmas_init, axis=0)
@@ -1169,7 +1169,7 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         # these dynamics terms go to all but last tau blocks
         dynamics_terms = np.array([
             np.sum([A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
-                    for i in range(self.lags), axis=0)
+                    for i in range(self.lags)], axis=0)
                    for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A^T Qinv A terms
 
         # marginalize over discrete state
@@ -1179,17 +1179,16 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         for l in range(self.lags):
             dynamics_term = np.array([
                 np.sum([A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
-                        for i in range(l), axis=0)
+                        for i in range(l)], axis=0)
                        for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A
             diag[-l] = np.sum(Ez[-l, :, None, None] * dynamics_term, axis=0)
 
-        # ----- Off-Diag Bands -----
+        # ----- Off-Diag Blocks -----
 
         # Make list of lagged As for easy indexing, and prepend A_0 = I
         A0 = np.eye(D)
         As_ = [[A0] + [A[:,j*self.D:(j+1)*self.D] for j in range(self.lags)]
                for A in self.As]
-
 	# Formula for hessian band elements. offdiag_elements is lags x K x D x D
         Hj = lambda j: [np.sum([A_[i-j].T @ inv_Sigma @ A_[i]
                                 for i in range(j, self.lags+1)], axis=0)
@@ -1197,17 +1196,17 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         offdiag_elements = np.array([Hj(j) for j in range(1, self.lags+1)])
 
 	# Marginalize over discrete state (broadcast over time). offdiag is lags x T x D x D
-        offdiag = np.array([np.sum(Ez[:,:,None,None] * band_elements[None,:,:,:], axis=1)
-                           for i, band_elements in enumerate(offdiag_elements)])
+        offdiag = [np.sum(Ez[1:,:,None,None] * band_elements[None,:,:,:], axis=1)
+                           for i, band_elements in enumerate(offdiag_elements)]
 
         # Each progressive offdiag band is actually one timepoint shorter, so we replace with zeros
-        for j in range(self.lags):
-            offdiag[j,-(j+1):,:,:] = 0
+        # for j in range(self.lags):
+            # offdiag[j,-(j+1):,:,:] = 0
             #print(offdiag[j,:,:,:].sum(axis=-1))
 
         # Final hessian_banded should be lags+1 x T x D x D.
-        hessian_banded = np.vstack((diag[None,:], offdiag))
-        return hessian_banded
+        # hessian_banded = np.vstack((diag[None,:], offdiag))
+        return diag, offdiag
 
 
 class AutoRegressiveObservationsNoInput(AutoRegressiveObservations):

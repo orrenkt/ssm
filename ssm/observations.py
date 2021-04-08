@@ -1117,6 +1117,10 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
                      l2_penalty_A=l2_penalty_A,
                      l2_penalty_b=l2_penalty_b)
 
+        # Initialize the dynamics and the noise covariances
+        self._As = .80 * np.array([
+                np.column_stack([random_rotation(D), np.random.randn(D, (lags-1)*D)]) for _ in range(K)])
+
     def neg_hessian_expected_log_dynamics_prob(self, Ez, data, input, mask, tag=None):
         assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
 
@@ -1379,7 +1383,6 @@ class AutoRegressiveDiagonalNoiseObservations(AutoRegressiveObservations):
 
         ll_ar = np.column_stack([stats.diagonal_gaussian_logpdf(data[L:], mu[L:], sigmasq)
                                for mu, sigmasq in zip(mus, self.sigmasq)])
-
 
         # Compute the likelihood of the initial data and remainder separately
         return np.row_stack((ll_init, ll_ar))

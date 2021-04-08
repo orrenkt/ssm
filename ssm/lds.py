@@ -9,7 +9,7 @@ from autograd import value_and_grad, grad
 from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
     convex_combination, newtons_method_block_tridiag_hessian, \
     newtons_method_banded_hessian
-from ssm.primitives import hmm_normalizer
+from ssm.primitives import hmm_normalizer, blocks_to_bands2
 from ssm.messages import hmm_expected_states, viterbi
 from ssm.util import ensure_args_are_lists, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, ssm_pbar
@@ -505,37 +505,19 @@ class SLDS(object):
         x_mask = np.ones((T, D), dtype=bool)
 
         # Start with dynamics
-        hessian_diag, hessian_off_diag = \
+        hessian_banded = \
             self.dynamics.neg_hessian_expected_log_dynamics_prob_banded(Ez, x, input, x_mask, tag)
+
         # Add discrete latent and emissions contributions
         J_transitions = self.transitions.\
             neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
         J_obs = self.emissions.\
             neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
-        # hessian_banded[0,:-1,:] += J_transitions
-        # hessian_banded[0,:] += J_obs
-        hessian_diag[:-1] += J_transitions 
-        hessian_diag += J_obs
-        # need to test that this is the same is regular diag and offdiag, but using regular not AR class..
-        #kwargs = dict(data=data, input=input, mask=mask, tag=tag, Ez=Ez, Ezzp1=Ezzp1, scale=scale)
-        #hess_diag, hess_lower_diag = self._laplace_hessian_neg_expected_log_joint(x=x, **kwargs)
-        #print('hess', hess_diag.shape, hessian_banded.shape)
-        #print(hess_diag[0,:2,:2])
-        #print(hessian_banded[0,:2,:2,:2])
-        hessian_banded = [hessian_diag,] + hessian_off_diag 
-
-        # We reshape to (lags+1)*D x T*D for solvh_banded. NOTE: double check this works as expected!
-        # hessian_banded = hessian_banded.reshape((self.dynamics.lags+1)*D, T*D)
-        from ssm.primitives import blocks_to_bands2
-        hessian_banded = blocks_to_bands2(list(hessian_banded)) # list may not be necessary
-    
-        #hessian_banded = hessian_banded[0,:]
-        #hessian_banded = hessian_banded.reshape((1)*D, T*D)
+        hessian_banded[0,:-1,:] += J_transitions
+        hessian_banded[0,:] += J_obs
 
         # Return scaled negative hessian
         return hessian_banded / scale
-
-        #return hessian_banded[0,:], hessian_banded[1,:]
 
     def _laplace_neg_hessian_params_to_hs(self,
                                           x,

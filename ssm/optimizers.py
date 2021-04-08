@@ -207,9 +207,7 @@ def newtons_method_banded_hessian(
     count = 0
     while not is_converged:
         H_banded = hess_func(x)
-        #H_diag, H_lower_diag = hess_func(x)
         g = grad_func(x)
-        #dx = -1.0 * solve_symm_block_tridiag(H_diag, H_lower_diag, g)
         dx = -1.0 * solve_symm_banded(H_banded, g)
         lambdasq = np.dot(g.ravel(), -1.0*dx.ravel())
         if lambdasq / 2.0 <= tolerance:

@@ -682,6 +682,71 @@ def test_laplace_em_hessian(N=5, K=3, D=2, T=20):
             assert np.allclose(h, h_dense)
 
 
+def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=3):
+    print("Checking analytical hessian.")
+    slds = ssm.SLDS(N, K, D, dynamics="higher_order", emissions="gaussian",
+                    dynamics_kwargs={'lags':lags})
+    slds.emissions.Fs[0] *= 0
+    z, x, y = slds.sample(T)
+    new_slds = ssm.SLDS(N, K, D, F_zero_flag=True, dynamics="higher_order",
+                        emissions="gaussian", dynamics_kwargs={'lags':lags})
+
+    inputs = [np.zeros((T, 0))]
+    masks = [np.ones_like(y)]
+    tags = [None]
+    method = "laplace_em"
+    datas = [y]
+    num_samples = 1
+
+    def neg_expected_log_joint_banded_wrapper(x_vec, T, D):
+        x = x_vec.reshape(T, D)
+        return new_slds._laplace_neg_expected_log_joint(datas[0],
+                                                               inputs[0],
+                                                               masks[0],
+                                                               tags[0],
+                                                               x,
+                                                               Ez,
+                                                               Ezzp1)
+    variational_posterior = new_slds._make_variational_posterior("structured_meanfield",
+                                                                 datas, inputs, masks, tags, method)
+    new_slds._fit_laplace_em_discrete_state_update(
+                    variational_posterior, datas, inputs, masks, tags, num_samples)
+    Ez, Ezzp1, _ = variational_posterior.discrete_expectations[0]
+
+    x = variational_posterior.mean_continuous_states[0]
+    scale = x.size
+    hessian_banded = new_slds._laplace_hessian_neg_expected_log_joint_banded(datas[0],
+                                                        inputs[0],
+                                                        masks[0],
+                                                        tags[0],
+                                                        x,
+                                                        Ez,
+                                                        Ezzp1)
+
+    # Need to reassmble Hessian from its bands. Start with diag and add offdiag bands
+    dense_hessian = scipy.linalg.block_diag(*[x for x in hessian_banded[0,:]])
+    diag = np.copy(dense_hessian)
+
+    for j in range(1, lags+1):
+        dense_hessian[j*D:, :-D*j] += scipy.linalg.block_diag(*[x for x in hessian_banded[j,:-j,:]])
+        dense_hessian[:-j*D, D*j:] += scipy.linalg.block_diag(*[x for x in hessian_banded[j,:-j,:]])
+
+    #dense_hessian = scipy.linalg.block_diag(*[x for x in J_diag])
+    #dense_hessian[D:, :-D] += scipy.linalg.block_diag(*[x for x in J_lower_diag])
+    #dense_hessian[:-D, D:] += scipy.linalg.block_diag(*[x.T for x in J_lower_diag])
+
+    true_hess = hessian(neg_expected_log_joint_banded_wrapper)(x.reshape(-1), T, D)
+
+    print(true_hess.shape, dense_hessian.shape)
+    import ipdb
+    ipdb.set_trace()
+    assert np.allclose(true_hess, dense_hessian)
+    print("Hessian passed.")
+
+    # Check if diagonal band alone is correct?
+
+
+
 if __name__ == "__main__":
     # test_blocks_to_banded()
     # test_transpose_banded()
@@ -703,4 +768,5 @@ if __name__ == "__main__":
     #     print("Performance comparison for LBFGS vs. Newton's method "
     #           "with T={}".format(T))
     #     lbfgs_newton_perf_comparison(T=T, N=5, K=1, D=30)
-    test_laplace_em_hessian()
+    #test_laplace_em_hessian()
+    test_laplace_em_ar_banded_hessian()

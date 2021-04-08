@@ -233,7 +233,9 @@ def blocks_to_full(J_diag, J_lower_diag):
         J[t*D:(t+1)*D, (t+1)*D:(t+2)*D] = J_lower_diag[t].T
     return J
 
+
 def blocks_to_bands2(J_blocks, lower=True):
+
     # J_blocks is [J_diag, J_lower_diag, ...]
     # List of ...
     lags = len(J_blocks) - 1
@@ -253,28 +255,27 @@ def blocks_to_bands2(J_blocks, lower=True):
 
                 if trow >= T:
                   continue
-                
-                # if t == trow:
-                #     L[u, j] = J_diag[t, drow, d]
-                # elif t == trow - 1:
-                #     L[u, j] = J_lower_diag[t, drow, d]
-                # else: L[u, j] = 0
+
                 for l in range(lags+1):
                     if t == trow - l:
                         L[u, j] = J_blocks[l][t, drow, d]
 
     return np.asarray(L)
 
+
 # Solve and multiply symmetric block tridiagonal systems
 def solve_symm_block_tridiag(J_diag, J_lower_diag, v):
     # import ipdb; ipdb.set_trace()
-    J_banded = blocks_to_bands(J_diag, J_lower_diag, lower=True)
     # J_banded2 = blocks_to_bands2([J_diag, J_lower_diag], lower=True)
-    return solve_symm_banded(J_banded, v)
+    J_banded = blocks_to_bands(J_diag, J_lower_diag, lower=True)
+    x_flat = solveh_banded(J_banded, np.ravel(v), lower=True)
+    return np.reshape(x_flat, v.shape)
 
 
 # Solve and multiply symmetric block tridiagonal systems
 def solve_symm_banded(J_banded, v):
+    # Change format for scipy's solvh_banded
+    J_banded = blocks_to_bands2(J_banded)
     x_flat = solveh_banded(J_banded, np.ravel(v), lower=True)
     return np.reshape(x_flat, v.shape)
 

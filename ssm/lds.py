@@ -630,7 +630,7 @@ class SLDS(object):
             # from ssm.primitives import lds_banded_sample
             # samples = []
             # for i in range(100):
-            #     samp = lds_banded_sample(J_banded, x, data.shape[0], D, self.dynamics.lags)
+            #     samp = lds_banded_sample(J_banded, x, data.shape[0], self.D, self.dynamics.lags)
             #     samples.append(samp)
             # samp_a = np.array(samples)
             # samp_mean = np.mean(samp_a, axis=0)
@@ -647,7 +647,12 @@ class SLDS(object):
             # for i in range(1, J_banded.shape[0]):
             #     full_hessian += np.diag(J_banded[i][:-i], i)
             #     full_hessian += np.diag(J_banded[i][:-i], -i)
-            # import ipdb; ipdb.set_trace()
+
+            # test symmetric banded matrix times vector
+            # out1 = full_hessian @ np.ravel(x)
+            # from ssm.primitives import symm_banded_times_vector
+            # out2 = symm_banded_times_vector(J_banded, np.ravel(x))
+            import ipdb; ipdb.set_trace()
 
             # samp = block_tridiagonal_sample(hessian_diag, hessian_lower_diag, h_out)
             continuous_state_params.append(dict(J_ini=J_ini,

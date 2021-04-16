@@ -488,3 +488,11 @@ def block_tridiagonal_mean(J_diag, J_lower_diag, h, lower=True):
     # Convert blocks to banded form so we can capitalize on Lapack code
     return solveh_banded(
         blocks_to_bands(J_diag, J_lower_diag, lower=lower), h.ravel(), lower=lower)
+
+def symm_banded_times_vector(J_banded, x):
+    num_bands = J_banded.shape[0]
+    out = J_banded[0] * np.ravel(x)
+    for p in range(1, num_bands):
+        out[:-p] += J_banded[p][:-p] * np.ravel(x)[p:]
+        out[p:] += J_banded[p][:-p] * np.ravel(x)[:-p]
+    return out

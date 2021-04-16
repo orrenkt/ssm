@@ -625,33 +625,36 @@ class SLDS(object):
 
             J_banded = self._laplace_hessian_neg_expected_log_joint_banded(
                 data, input, mask, tag, x, Ez, Ezzp1)
+            from ssm.primitives import symm_banded_times_vector
+            h = symm_banded_times_vector(J_banded, np.ravel(x)).reshape((x.shape))
 
             # debugging code for sampling from banded hessian
-            # from ssm.primitives import lds_banded_sample
-            # samples = []
-            # for i in range(100):
-            #     samp = lds_banded_sample(J_banded, x, data.shape[0], self.D, self.dynamics.lags)
-            #     samples.append(samp)
-            # samp_a = np.array(samples)
-            # samp_mean = np.mean(samp_a, axis=0)
-            # import matplotlib.pyplot as plt 
-            # plt.figure()
-            # plt.plot(x, 'k')
-            # plt.plot(samp_mean,'b')
-            # for i in range(100):
-            #     plt.plot(samples[i], 'b', linewidth=0.5, alpha=0.5)
-            # plt.show()
-            # # build hessian
-            # T = data.shape[0]
-            # full_hessian = np.diag(J_banded[0])
-            # for i in range(1, J_banded.shape[0]):
-            #     full_hessian += np.diag(J_banded[i][:-i], i)
-            #     full_hessian += np.diag(J_banded[i][:-i], -i)
+            from ssm.primitives import lds_banded_sample
+            samples = []
+            for i in range(100):
+                samp = lds_banded_sample(J_banded, h, data.shape[0], self.D, self.dynamics.lags)
+                samples.append(samp)
+            samp_a = np.array(samples)
+            samp_mean = np.mean(samp_a, axis=0)
+            import matplotlib.pyplot as plt 
+            plt.figure()
+            plt.plot(x, 'k')
+            plt.plot(samp_mean,'b')
+            for i in range(100):
+                plt.plot(samples[i], 'b', linewidth=0.5, alpha=0.5)
+            plt.show()
+            # build hessian
+            T = data.shape[0]
+            full_hessian = np.diag(J_banded[0])
+            for i in range(1, J_banded.shape[0]):
+                full_hessian += np.diag(J_banded[i][:-i], i)
+                full_hessian += np.diag(J_banded[i][:-i], -i)
 
             # test symmetric banded matrix times vector
-            # out1 = full_hessian @ np.ravel(x)
-            # from ssm.primitives import symm_banded_times_vector
-            # out2 = symm_banded_times_vector(J_banded, np.ravel(x))
+            out1 = full_hessian @ np.ravel(x)
+            out2 = symm_banded_times_vector(J_banded, np.ravel(x))
+            from ssm.primitives import banded_log_probability
+            ll = banded_log_probability(x, J_banded, h)
             import ipdb; ipdb.set_trace()
 
             # samp = block_tridiagonal_sample(hessian_diag, hessian_lower_diag, h_out)

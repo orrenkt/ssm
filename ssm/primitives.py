@@ -407,6 +407,45 @@ def block_tridiagonal_log_probability(x, J_diag, J_lower_diag, h):
 
     return ll
 
+def symm_banded_times_vector(J_banded, x):
+    """
+    Multiply symmetric banded matrix times vector.
+    J_banded is the banded form of the matrix, as specified for scipy banded solvers.
+
+    C.f. https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.solveh_banded.html
+    """
+    num_bands = J_banded.shape[0]
+    out = J_banded[0] * x
+    for p in range(1, num_bands):
+        out[:-p] += J_banded[p][:-p] * x[p:]
+        out[p:] += J_banded[p][:-p] * x[:-p]
+    return out
+
+def banded_log_probability(x, J_banded, h):
+
+    T, D = x.shape
+    assert h.shape == (T, D)
+
+    # -1/2 x^T J x 
+    ll = -0.5 * np.dot(np.ravel(x), symm_banded_times_vector(J_banded, np.ravel(x)))
+
+    # h^T x
+    ll += np.sum(h * x)
+
+    # -1/2 h^T J^{-1} h = -1/2 h^T (LL^T)^{-1} h
+    #                   = -1/2 h^T L^{-T} L^{-1} h
+    #                   = -1/2 (L^{-1}h)^T (L^{-1} h)
+    # L = cholesky_block_tridiag(J_diag, J_lower_diag, lower=True)
+    L = cholesky_banded(J_banded, lower=True)
+    Linv_h = solve_banded((2*D-1, 0), L, h.ravel())
+    ll -= 1/2 * np.sum(Linv_h * Linv_h)
+
+    # 1/2 log |J| -TD/2 log(2 pi) = log |L| -TD/2 log(2 pi)
+    L_diag = L[0]
+    ll += np.sum(np.log(L_diag))
+    ll -= 1/2 * T * D * np.log(2 * np.pi)
+
+    return ll
 
 def lds_sample(As, bs, Qi_sqrts, ms, Ri_sqrts, z=None):
     """
@@ -447,8 +486,7 @@ def block_tridiagonal_sample(J_diag, J_lower_diag, h, z=None):
     return samples + mu
 
 
-# def lds_banded_sample(J_banded, h, T, D, Lags, z=None):
-def lds_banded_sample(J_banded, mu, T, D, Lags, z=None):
+def lds_banded_sample(J_banded, h, T, D, Lags, z=None):
     """
     Sample a Gaussian chain graph represented by a block
     tridiagonal precision matrix and a linear potential.
@@ -463,7 +501,7 @@ def lds_banded_sample(J_banded, mu, T, D, Lags, z=None):
     samples = np.reshape(solve_banded((0, (Lags+1)*D-1), U, z), (T, D))
 
     # Get the mean mu = J^{-1} h
-    # mu = np.reshape(solveh_banded(J_banded, np.ravel(h), lower=True), (T, D))
+    mu = np.reshape(solveh_banded(J_banded, np.ravel(h), lower=True), (T, D))
 
     # Add the mean
     return samples + mu
@@ -488,11 +526,3 @@ def block_tridiagonal_mean(J_diag, J_lower_diag, h, lower=True):
     # Convert blocks to banded form so we can capitalize on Lapack code
     return solveh_banded(
         blocks_to_bands(J_diag, J_lower_diag, lower=lower), h.ravel(), lower=lower)
-
-def symm_banded_times_vector(J_banded, x):
-    num_bands = J_banded.shape[0]
-    out = J_banded[0] * np.ravel(x)
-    for p in range(1, num_bands):
-        out[:-p] += J_banded[p][:-p] * np.ravel(x)[p:]
-        out[p:] += J_banded[p][:-p] * np.ravel(x)[:-p]
-    return out

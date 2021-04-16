@@ -430,7 +430,6 @@ def block_tridiagonal_sample(J_diag, J_lower_diag, h, z=None):
     T, D = h.shape
     assert J_diag.shape == (T, D, D)
     assert J_lower_diag.shape == (T-1, D, D)
-
     # Convert blocks to banded form so we can capitalize on Lapack code
     J_banded = A_banded = blocks_to_bands(J_diag, J_lower_diag, lower=True)
     L = cholesky_banded(J_banded, lower=True)
@@ -443,6 +442,28 @@ def block_tridiagonal_sample(J_diag, J_lower_diag, h, z=None):
 
     # Get the mean mu = J^{-1} h
     mu = np.reshape(solveh_banded(J_banded, np.ravel(h), lower=True), (T, D))
+
+    # Add the mean
+    return samples + mu
+
+
+# def lds_banded_sample(J_banded, h, T, D, Lags, z=None):
+def lds_banded_sample(J_banded, mu, T, D, Lags, z=None):
+    """
+    Sample a Gaussian chain graph represented by a block
+    tridiagonal precision matrix and a linear potential.
+    """
+    # Convert blocks to banded form so we can capitalize on Lapack code
+    L = cholesky_banded(J_banded, lower=True)
+    U = transpose_banded(((Lags+1)*D-1, 0), L)
+
+    # We have (U^T U)^{-1} = U^{-1} U^{-T} = AA^T = Sigma
+    # where A = U^{-1}.  Samples are Az = U^{-1}z = x, or equivalently Ux = z.
+    z = npr.randn(T*D,) if z is None else np.reshape(z, (T*D,))
+    samples = np.reshape(solve_banded((0, (Lags+1)*D-1), U, z), (T, D))
+
+    # Get the mean mu = J^{-1} h
+    # mu = np.reshape(solveh_banded(J_banded, np.ravel(h), lower=True), (T, D))
 
     # Add the mean
     return samples + mu

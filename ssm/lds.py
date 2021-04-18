@@ -596,8 +596,6 @@ class SLDS(object):
             # Evaluate the Hessian at the mode
             assert np.all(np.isfinite(_objective(x, -1)))
 
-            # import ipdb; ipdb.set_trace()
-
             J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = self.\
                 _laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
 
@@ -607,10 +605,41 @@ class SLDS(object):
             #    raise ValueError('WIP!')
                 #x =
 
-            h_ini, h_dyn_1, h_dyn_2, h_obs = \
-                self._laplace_neg_hessian_params_to_hs(x, J_ini, J_dyn_11,
-                                              J_dyn_21, J_dyn_22, J_obs)
+            J_banded = self._laplace_hessian_neg_expected_log_joint_banded(
+                data, input, mask, tag, x, Ez, Ezzp1)
+            from ssm.primitives import symm_banded_times_vector
+            h = symm_banded_times_vector(J_banded, np.ravel(x)).reshape((x.shape))
 
+            # debugging code for sampling from banded hessian
+            from ssm.primitives import lds_banded_sample
+            samples = []
+            for i in range(100):
+                samp = lds_banded_sample(J_banded, h, data.shape[0], self.D, self.dynamics.lags)
+                samples.append(samp)
+            samp_a = np.array(samples)
+            samp_mean = np.mean(samp_a, axis=0)
+            import matplotlib.pyplot as plt 
+            plt.figure()
+            plt.plot(x, 'k')
+            plt.plot(samp_mean,'b')
+            for i in range(100):
+                plt.plot(samples[i], 'b', linewidth=0.5, alpha=0.5)
+            plt.show()
+            # build hessian
+            T = data.shape[0]
+            full_hessian = np.diag(J_banded[0])
+            for i in range(1, J_banded.shape[0]):
+                full_hessian += np.diag(J_banded[i][:-i], i)
+                full_hessian += np.diag(J_banded[i][:-i], -i)
+
+            # test symmetric banded matrix times vector
+            out1 = full_hessian @ np.ravel(x)
+            out2 = symm_banded_times_vector(J_banded, np.ravel(x))
+            from ssm.primitives import banded_log_probability
+            ll = banded_log_probability(x, J_banded, h)
+            import ipdb; ipdb.set_trace()
+
+            # samp = block_tridiagonal_sample(hessian_diag, hessian_lower_diag, h_out)
             continuous_state_params.append(dict(J_ini=J_ini,
                                                 J_dyn_11=J_dyn_11,
                                                 J_dyn_21=J_dyn_21,
@@ -623,10 +652,6 @@ class SLDS(object):
 
         # Update the variational posterior params
         variational_posterior.continuous_state_params = continuous_state_params
-
-        # FOR DEBUG
-        variational_posterior.sample_continuous_states()
-        ipdb.set_trace()
 
     def _fit_laplace_em_params_update(self,
                                       variational_posterior,

@@ -374,6 +374,7 @@ def lds_log_probability(x, As, bs, Qi_sqrts, ms, Ri_sqrts):
     return block_tridiagonal_log_probability(x,
             *convert_lds_to_block_tridiag(As, bs, Qi_sqrts, ms, Ri_sqrts))
 
+
 def block_tridiagonal_log_probability(x, J_diag, J_lower_diag, h):
 
     T, D = x.shape
@@ -389,6 +390,48 @@ def block_tridiagonal_log_probability(x, J_diag, J_lower_diag, h):
 
     # -\sum_{t=1}^{T-1} x_t.T J_{t,t+1} x_{t+1}
     ll -= np.sum(np.matmul(x[1:, None, :], np.matmul(J_lower_diag, x[:-1, :, None])))
+
+    # h^T x
+    ll += np.sum(h * x)
+
+    # -1/2 h^T J^{-1} h = -1/2 h^T (LL^T)^{-1} h
+    #                   = -1/2 h^T L^{-T} L^{-1} h
+    #                   = -1/2 (L^{-1}h)^T (L^{-1} h)
+    # L = cholesky_block_tridiag(J_diag, J_lower_diag, lower=True)
+    L = cholesky_banded(J_banded, lower=True)
+    Linv_h = solve_banded((2*D-1, 0), L, h.ravel())
+    ll -= 1/2 * np.sum(Linv_h * Linv_h)
+
+    # 1/2 log |J| -TD/2 log(2 pi) = log |L| -TD/2 log(2 pi)
+    L_diag = L[0]
+    ll += np.sum(np.log(L_diag))
+    ll -= 1/2 * T * D * np.log(2 * np.pi)
+
+    return ll
+
+
+def symm_banded_times_vector(J_banded, x):
+    """
+    Multiply symmetric banded matrix times vector.
+    J_banded is the banded form of the matrix, as specified for scipy banded solvers.
+
+    C.f. https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.solveh_banded.html
+    """
+    num_bands = J_banded.shape[0]
+    out = J_banded[0] * x
+    for p in range(1, num_bands):
+        out[:-p] += J_banded[p][:-p] * x[p:]
+        out[p:] += J_banded[p][:-p] * x[:-p]
+    return out
+
+
+def banded_log_probability(x, J_banded, h):
+
+    T, D = x.shape
+    assert h.shape == (T, D)
+
+    # -1/2 x^T J x
+    ll = -0.5 * np.dot(np.ravel(x), symm_banded_times_vector(J_banded, np.ravel(x)))
 
     # h^T x
     ll += np.sum(h * x)
@@ -443,7 +486,6 @@ def block_band_log_probability(x, hessian_bands, h):
     return ll
 
 
-
 def lds_sample(As, bs, Qi_sqrts, ms, Ri_sqrts, z=None):
     """
     Sample a linear dynamical system
@@ -466,7 +508,6 @@ def block_tridiagonal_sample(J_diag, J_lower_diag, h, z=None):
     T, D = h.shape
     assert J_diag.shape == (T, D, D)
     assert J_lower_diag.shape == (T-1, D, D)
-
     # Convert blocks to banded form so we can capitalize on Lapack code
     J_banded = A_banded = blocks_to_bands(J_diag, J_lower_diag, lower=True)
     L = cholesky_banded(J_banded, lower=True)
@@ -484,23 +525,19 @@ def block_tridiagonal_sample(J_diag, J_lower_diag, h, z=None):
     return samples + mu
 
 
-def block_banded_sample(hessian_bands, h, z=None):
+def lds_banded_sample(J_banded, h, T, D, Lags, z=None):
     """
     Sample a Gaussian chain graph represented by a block
     tridiagonal precision matrix and a linear potential.
     """
-    T, D = h.shape
-    assert hessian_bands.shape = (self.dynamics.lags, T, D, D)
-
-
-    J_banded = blocks_to_bands2(hessian_bands)
+    # Convert blocks to banded form so we can capitalize on Lapack code
     L = cholesky_banded(J_banded, lower=True)
-    U = transpose_banded((2*D-1, 0), L)
+    U = transpose_banded(((Lags+1)*D-1, 0), L)
 
     # We have (U^T U)^{-1} = U^{-1} U^{-T} = AA^T = Sigma
     # where A = U^{-1}.  Samples are Az = U^{-1}z = x, or equivalently Ux = z.
     z = npr.randn(T*D,) if z is None else np.reshape(z, (T*D,))
-    samples = np.reshape(solve_banded((0, 2*D-1), U, z), (T, D))
+    samples = np.reshape(solve_banded((0, (Lags+1)*D-1), U, z), (T, D))
 
     # Get the mean mu = J^{-1} h
     mu = np.reshape(solveh_banded(J_banded, np.ravel(h), lower=True), (T, D))

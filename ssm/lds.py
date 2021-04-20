@@ -506,7 +506,7 @@ class SLDS(object):
         x_mask = np.ones((T, D), dtype=bool)
 
         # Start with dynamics
-        hessian_banded = \
+        hessian_blocks = \
             self.dynamics.neg_hessian_expected_log_dynamics_prob_banded(Ez, x, input, x_mask, tag)
 
         # Add discrete latent and emissions contributions
@@ -514,8 +514,9 @@ class SLDS(object):
             neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
         J_obs = self.emissions.\
             neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
-        hessian_banded[0,:-1,:] += J_transitions
-        hessian_banded[0,:] += J_obs
+        hessian_blocks[0,:-1,:] += J_transitions
+        hessian_blocks[0,:] += J_obs
+        hessian_banded = blocks_to_bands2(hessian_banded)
 
         # Return scaled negative hessian
         return hessian_banded / scale
@@ -614,8 +615,8 @@ class SLDS(object):
                                                     h_dyn_2=h_dyn_2,
                                                     h_obs=h_obs))
             elif type(variational_posterior) is varinf.SLDSStructuredMeanFieldBandedVariationalPosterior:
-                J_banded = blocks_to_bands2(self._laplace_hessian_neg_expected_log_joint_banded(
-                    data, input, mask, tag, x, Ez, Ezzp1))
+                J_banded = self._laplace_hessian_neg_expected_log_joint_banded(
+                    data, input, mask, tag, x, Ez, Ezzp1)
                 h = symm_banded_times_vector(J_banded, np.ravel(x)).reshape((x.shape))
                 continuous_state_params.append(dict(J_banded=J_banded,h=h))
 

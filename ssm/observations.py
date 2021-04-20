@@ -1247,6 +1247,10 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
                                             for i, band_elements in enumerate(offdiag_elements)])
         #print(_.shape, offdiag.shape)
 
+	# Marginalize over discrete state (broadcast over time). offdiag is lags x T x D x D
+        #offdiag = [np.sum(Ez[1:,:,None,None] * band_elements[None,:,:,:], axis=1)
+        #                   for i, band_elements in enumerate(offdiag_elements)]
+
         # Need to zero pad the progressive offdiag bands
         # the j'th band has j=0 for the last j'th entries
         # for the last self.lags-j elements, there is only a sum over T-t dynamics elements

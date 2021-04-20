@@ -449,40 +449,6 @@ def banded_log_probability(x, J_banded, h):
     return ll
 
 
-def block_band_log_probability(x, hessian_bands, h):
-
-    T, D = x.shape
-    assert h.shape == (T, D)
-    assert hessian_bands.shape == (self.dynamics.lags, T, D, D)
-
-    # Convert blocks to banded form so we can capitalize on Lapack code
-    J_banded = blocks_to_bands2(hessian_bands)
-
-    # -1/2 x^T J x = -1/2 \sum_{t=1}^T x_t.T J_tt x_t
-    ll = -1/2 * np.sum(np.matmul(x[:, None, :], np.matmul(J_diag, x[:, :, None])))
-
-    # -\sum_{t=1}^{T-1} x_t.T J_{t,t+1} x_{t+1}
-    ll -= np.sum(np.matmul(x[1:, None, :], np.matmul(J_lower_diag, x[:-1, :, None])))
-
-    # h^T x
-    ll += np.sum(h * x)
-
-    # -1/2 h^T J^{-1} h = -1/2 h^T (LL^T)^{-1} h
-    #                   = -1/2 h^T L^{-T} L^{-1} h
-    #                   = -1/2 (L^{-1}h)^T (L^{-1} h)
-    # L = cholesky_block_tridiag(J_diag, J_lower_diag, lower=True)
-    L = cholesky_banded(J_banded, lower=True)
-    Linv_h = solve_banded((2*D-1, 0), L, h.ravel())
-    ll -= 1/2 * np.sum(Linv_h * Linv_h)
-
-    # 1/2 log |J| -TD/2 log(2 pi) = log |L| -TD/2 log(2 pi)
-    L_diag = L[0]
-    ll += np.sum(np.log(L_diag))
-    ll -= 1/2 * T * D * np.log(2 * np.pi)
-
-    return ll
-
-
 def lds_sample(As, bs, Qi_sqrts, ms, Ri_sqrts, z=None):
     """
     Sample a linear dynamical system

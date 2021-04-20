@@ -13,6 +13,7 @@ from ssm.regression import fit_linear_regression, generalized_newton_studentst_d
 from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
+from ssm.primitives import blocks_to_bands2
 import ssm.stats as stats
 
 class Observations(object):
@@ -1152,6 +1153,8 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
     def neg_hessian_expected_log_dynamics_prob_banded(self, Ez, data, input, mask, tag=None):
         """
         TBD.
+        Note we return block form of the dynamics compoenent of the hessian not the banded..
+        WRITE DOWN SHAPES
         """
         assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
 
@@ -1162,7 +1165,7 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
 
         # Init hessian
-        hessian_bands = np.zeros((self.lags+1,T,D,D))
+        hessian_blocks = np.zeros((self.lags+1,T,D,D))
 
         # List of As by lag for easy indexing. Prepend A0=I
         A0 = np.eye(D)
@@ -1175,19 +1178,19 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
                                      for A_, inv_Sigma in zip(As_, inv_Sigmas)])
 
         # Marginalize over discrete state var with broadcast. bands is lags+1 x T x D x D
-        hessian_bands[:,:-self.lags,:] = np.array([np.sum(Ez[:-self.lags,:,None,None] * \
-                                                   Hj(j,self.lags+1)[None,:], axis=1)
-                                                   for j in range(0, self.lags+1)])
+        hessian_blocks[:,:-self.lags,:] = np.array([np.sum(Ez[:-self.lags,:,None,None] * \
+                                                    Hj(j,self.lags+1)[None,:], axis=1)
+                                                    for j in range(0, self.lags+1)])
 
         # First diag timepoint is unique with Q_0^-1 + {...} instead of Q. We substract Q^-1 and add Q_0^-1
-        hessian_bands[0,0,:] += np.sum(Ez[0,:,None,None] * (inv_Sigmas_init-inv_Sigmas), axis=0)
+        hessian_blocks[0,0,:] += np.sum(Ez[0,:,None,None] * (inv_Sigmas_init-inv_Sigmas), axis=0)
 
         # Fill in the last tau-j blocks below for each band
         for j in range(1, self.lags+1):  # j'th band
             for l in range(j, self.lags):  # timepoints
-                hessian_bands[j,-l,:] = np.sum(Ez[-l,:,None,None] * Hj(j,l), axis=0)
+                hessian_blocks[j,-l,:] = np.sum(Ez[-l,:,None,None] * Hj(j,l), axis=0)
 
-        return hessian_bands
+        return hessian_blocks
 
     def neg_hessian_expected_log_dynamics_prob_banded2(self, Ez, data, input, mask, tag=None):
         """
@@ -1245,32 +1248,6 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         offdiag[:,:-self.lags,:] = np.array([np.sum(Ez[:-self.lags,:,None,None] * \
                                              band_elements[None,:,:,:], axis=1)
                                             for i, band_elements in enumerate(offdiag_elements)])
-        #print(_.shape, offdiag.shape)
-
-	# Marginalize over discrete state (broadcast over time). offdiag is lags x T x D x D
-        #offdiag = [np.sum(Ez[1:,:,None,None] * band_elements[None,:,:,:], axis=1)
-        #                   for i, band_elements in enumerate(offdiag_elements)]
-
-        # Need to zero pad the progressive offdiag bands
-        # the j'th band has j=0 for the last j'th entries
-        # for the last self.lags-j elements, there is only a sum over T-t dynamics elements
-
-        # Fill in the last tau-j blocks below for each band
-        #for j in range(1, self.lags+1):  # j'th band
-        #    for l in range(j, self.lags):  # timepoints
-        #
-        #        dynamics_term = np.array([
-        #            np.sum([A[:,i*self.D:(i+1)*self.D].T@inv_Sigma@A[:,i*self.D:(i+1)*self.D]
-        #                    for i in range(l)], axis=0)
-        #                   for A, inv_Sigma in zip(self.As, inv_Sigmas)]) # A
-
-        #        offdiag[j,-l,:] = np.sum(Ez[-l,:,None,None] * dynamics_term, axis=0)
-
-
-         #       Hj = lambda j: [np.sum([A_[i-j].T @ inv_Sigma @ A_[i]
-          #                              for i in range(j, self.lags+1)], axis=0)
-            #                    for A_, inv_Sigma in zip(As_, inv_Sigmas)]
-           #     offdiag_elements = np.array([Hj(j) for j in range(1, self.lags+1)])
 
         return diag, offdiag
 

@@ -500,7 +500,8 @@ class SLDS(object):
         # Return the scaled negative hessian, which is positive definite
         return hessian_diag / scale, hessian_lower_diag / scale
 
-    def _laplace_hessian_neg_expected_log_joint_banded(self, data, input, mask, tag, x, Ez, Ezzp1, scale=1):
+    def _laplace_hessian_neg_expected_log_joint_banded(self, data, input, mask, tag, x, Ez, Ezzp1,
+                                                       scale=1, return_blocks=False):
 
         T, D = np.shape(x)
         x_mask = np.ones((T, D), dtype=bool)
@@ -516,10 +517,12 @@ class SLDS(object):
             neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
         hessian_blocks[0,:-1,:] += J_transitions
         hessian_blocks[0,:] += J_obs
-        hessian_banded = blocks_to_bands2(hessian_banded)
 
         # Return scaled negative hessian
-        return hessian_banded / scale
+        if return_blocks:
+            return hessian_blocks / scale
+
+        return blocks_to_bands2(hessian_blocks) / scale
 
     def _laplace_neg_hessian_params_to_hs(self,
                                           x,

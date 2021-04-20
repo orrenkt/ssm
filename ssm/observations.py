@@ -13,6 +13,7 @@ from ssm.regression import fit_linear_regression, generalized_newton_studentst_d
 from ssm.preprocessing import interpolate_data
 from ssm.cstats import robust_ar_statistics
 from ssm.optimizers import adam, bfgs, rmsprop, sgd, lbfgs
+from ssm.primitives import blocks_to_bands2
 import ssm.stats as stats
 
 class Observations(object):
@@ -1117,6 +1118,10 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
                      l2_penalty_A=l2_penalty_A,
                      l2_penalty_b=l2_penalty_b)
 
+        # Initialize the dynamics and the noise covariances
+        self._As = .80 * np.array([
+                np.column_stack([random_rotation(D), np.random.randn(D, (lags-1)*D)]) for _ in range(K)])
+
     def neg_hessian_expected_log_dynamics_prob(self, Ez, data, input, mask, tag=None):
         assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
 
@@ -1148,6 +1153,48 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
     def neg_hessian_expected_log_dynamics_prob_banded(self, Ez, data, input, mask, tag=None):
         """
         TBD.
+        Note we return block form of the dynamics compoenent of the hessian not the banded..
+        WRITE DOWN SHAPES
+        """
+        assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
+
+        T, D = data.shape
+        K = Ez.shape[-1]
+
+        inv_Sigmas = np.linalg.inv(self.Sigmas)
+        inv_Sigmas_init = np.linalg.inv(self.Sigmas_init)
+
+        # Init hessian
+        hessian_blocks = np.zeros((self.lags+1,T,D,D))
+
+        # List of As by lag for easy indexing. Prepend A0=I
+        A0 = np.eye(D)
+        As_ = [[A0] + [A[:,j*self.D:(j+1)*self.D] for j in range(self.lags)]
+               for A in self.As]
+
+        # Formula for hessian band elements. Returns K x D x D
+        Hj = lambda j,lags: np.array([np.sum([A_[i-j].T @ inv_Sigma @ A_[i]
+                                      for i in range(j, lags)], axis=0)
+                                     for A_, inv_Sigma in zip(As_, inv_Sigmas)])
+
+        # Marginalize over discrete state var with broadcast. bands is lags+1 x T x D x D
+        hessian_blocks[:,:-self.lags,:] = np.array([np.sum(Ez[:-self.lags,:,None,None] * \
+                                                    Hj(j,self.lags+1)[None,:], axis=1)
+                                                    for j in range(0, self.lags+1)])
+
+        # First diag timepoint is unique with Q_0^-1 + {...} instead of Q. We substract Q^-1 and add Q_0^-1
+        hessian_blocks[0,0,:] += np.sum(Ez[0,:,None,None] * (inv_Sigmas_init-inv_Sigmas), axis=0)
+
+        # Fill in the last tau-j blocks below for each band
+        for j in range(1, self.lags+1):  # j'th band
+            for l in range(j, self.lags):  # timepoints
+                hessian_blocks[j,-l,:] = np.sum(Ez[-l,:,None,None] * Hj(j,l), axis=0)
+
+        return hessian_blocks
+
+    def neg_hessian_expected_log_dynamics_prob_banded2(self, Ez, data, input, mask, tag=None):
+        """
+        TBD.
         """
         assert np.all(mask), "Cannot compute negative Hessian of autoregressive obsevations with missing data."
 
@@ -1165,6 +1212,7 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         # Change first block
         diag[0] = np.sum(Ez[0, :, None, None] * inv_Sigmas_init, axis=0)
         diag[1:] = np.sum(Ez[1:,:,None,None] * inv_Sigmas[None,:], axis=1)
+        # NOTE: I think this diag[1:] is getting overwritten later when filling diag[-l]
 
         # these dynamics terms go to all but last tau blocks
         dynamics_terms = np.array([
@@ -1196,16 +1244,11 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         offdiag_elements = np.array([Hj(j) for j in range(1, self.lags+1)])
 
 	# Marginalize over discrete state (broadcast over time). offdiag is lags x T x D x D
-        offdiag = [np.sum(Ez[1:,:,None,None] * band_elements[None,:,:,:], axis=1)
-                           for i, band_elements in enumerate(offdiag_elements)]
+        offdiag = np.zeros(self.lags,T,D,D)
+        offdiag[:,:-self.lags,:] = np.array([np.sum(Ez[:-self.lags,:,None,None] * \
+                                             band_elements[None,:,:,:], axis=1)
+                                            for i, band_elements in enumerate(offdiag_elements)])
 
-        # Each progressive offdiag band is actually one timepoint shorter, so we replace with zeros
-        # for j in range(self.lags):
-            # offdiag[j,-(j+1):,:,:] = 0
-            #print(offdiag[j,:,:,:].sum(axis=-1))
-
-        # Final hessian_banded should be lags+1 x T x D x D.
-        # hessian_banded = np.vstack((diag[None,:], offdiag))
         return diag, offdiag
 
 
@@ -1321,7 +1364,6 @@ class AutoRegressiveDiagonalNoiseObservations(AutoRegressiveObservations):
 
         ll_ar = np.column_stack([stats.diagonal_gaussian_logpdf(data[L:], mu[L:], sigmasq)
                                for mu, sigmasq in zip(mus, self.sigmasq)])
-
 
         # Compute the likelihood of the initial data and remainder separately
         return np.row_stack((ll_init, ll_ar))

@@ -233,7 +233,9 @@ def blocks_to_full(J_diag, J_lower_diag):
         J[t*D:(t+1)*D, (t+1)*D:(t+2)*D] = J_lower_diag[t].T
     return J
 
+
 def blocks_to_bands2(J_blocks, lower=True):
+
     # J_blocks is [J_diag, J_lower_diag, ...]
     # List of ...
     lags = len(J_blocks) - 1
@@ -253,23 +255,17 @@ def blocks_to_bands2(J_blocks, lower=True):
 
                 if trow >= T:
                   continue
-                
-                # if t == trow:
-                #     L[u, j] = J_diag[t, drow, d]
-                # elif t == trow - 1:
-                #     L[u, j] = J_lower_diag[t, drow, d]
-                # else: L[u, j] = 0
+
                 for l in range(lags+1):
                     if t == trow - l:
                         L[u, j] = J_blocks[l][t, drow, d]
 
     return np.asarray(L)
 
+
 # Solve and multiply symmetric block tridiagonal systems
 def solve_symm_block_tridiag(J_diag, J_lower_diag, v):
-    # import ipdb; ipdb.set_trace()
     J_banded = blocks_to_bands(J_diag, J_lower_diag, lower=True)
-    # J_banded2 = blocks_to_bands2([J_diag, J_lower_diag], lower=True)
     return solve_symm_banded(J_banded, v)
 
 
@@ -373,6 +369,7 @@ def lds_log_probability(x, As, bs, Qi_sqrts, ms, Ri_sqrts):
     return block_tridiagonal_log_probability(x,
             *convert_lds_to_block_tridiag(As, bs, Qi_sqrts, ms, Ri_sqrts))
 
+
 def block_tridiagonal_log_probability(x, J_diag, J_lower_diag, h):
 
     T, D = x.shape
@@ -407,6 +404,7 @@ def block_tridiagonal_log_probability(x, J_diag, J_lower_diag, h):
 
     return ll
 
+
 def symm_banded_times_vector(J_banded, x):
     """
     Multiply symmetric banded matrix times vector.
@@ -421,6 +419,7 @@ def symm_banded_times_vector(J_banded, x):
         out[p:] += J_banded[p][:-p] * x[:-p]
     return out
 
+
 def banded_log_probability(x, J_banded, h):
 
     T, D = x.shape
@@ -428,7 +427,7 @@ def banded_log_probability(x, J_banded, h):
     Lags = int(B / D) - 1
     assert h.shape == (T, D)
 
-    # -1/2 x^T J x 
+    # -1/2 x^T J x
     ll = -0.5 * np.dot(np.ravel(x), symm_banded_times_vector(J_banded, np.ravel(x)))
 
     # h^T x
@@ -448,6 +447,7 @@ def banded_log_probability(x, J_banded, h):
     ll -= 1/2 * T * D * np.log(2 * np.pi)
 
     return ll
+
 
 def lds_sample(As, bs, Qi_sqrts, ms, Ri_sqrts, z=None):
     """

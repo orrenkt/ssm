@@ -26,6 +26,7 @@ color_names = ["windows blue",
 colors = sns.xkcd_palette(color_names)
 from ssm import SLDS
 from ssm.util import random_rotation
+
 # Set the parameters of the SLDS
 T = 200   # number of time bins
 K = 1      # number of discrete states
@@ -33,17 +34,17 @@ D = 2      # number of latent dimensions
 N = 20     # number of observed dimensions
 M = 0      # number of inputs
 lags = 3
+
 # Make an LDS with somewhat interesting dynamics parameters
 true_lds = SLDS(N, K, D, M=M, dynamics="higher_order", emissions="gaussian",
                 dynamics_kwargs={'lags':lags})
 A0 = .7 * random_rotation(D, theta=np.pi/20)
 S = np.arange(1, D+1)
 R = np.linalg.svd(npr.randn(D, D))[0] * S
-#A = np.stack([R.dot(A0).dot(np.linalg.inv(R)), 
 b = npr.randn(D)
-#true_lds.dynamics.As[0] = A
 true_lds.dynamics.bs[0] = b
 true_lds.emissions.Fs[0] = 0.0 * true_lds.emissions.Fs[0]
+
 # Sample
 # us = 0.2 * npr.choice([0,1], (T, M), replace=True)
 us = 0.2 * npr.randn(T, M)

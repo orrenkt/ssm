@@ -265,8 +265,6 @@ def blocks_to_bands2(J_blocks, lower=True):
 
 # Solve and multiply symmetric block tridiagonal systems
 def solve_symm_block_tridiag(J_diag, J_lower_diag, v):
-    # import ipdb; ipdb.set_trace()
-    # J_banded2 = blocks_to_bands2([J_diag, J_lower_diag], lower=True)
     J_banded = blocks_to_bands(J_diag, J_lower_diag, lower=True)
     x_flat = solveh_banded(J_banded, np.ravel(v), lower=True)
     return np.reshape(x_flat, v.shape)
@@ -458,7 +456,7 @@ def block_band_log_probability(x, hessian_bands, h):
 
     T, D = x.shape
     assert h.shape == (T, D)
-    assert hessian_bands.shape = (self.dynamics.lags, T, D, D)
+    assert hessian_bands.shape == (self.dynamics.lags, T, D, D)
 
     # Convert blocks to banded form so we can capitalize on Lapack code
     J_banded = blocks_to_bands2(hessian_bands)

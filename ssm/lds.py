@@ -9,7 +9,8 @@ from autograd import value_and_grad, grad
 from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
     convex_combination, newtons_method_block_tridiag_hessian, \
     newtons_method_banded_hessian
-from ssm.primitives import hmm_normalizer, symm_banded_times_vector
+from ssm.primitives import hmm_normalizer, symm_banded_times_vector, \
+    blocks_to_bands2
 from ssm.messages import hmm_expected_states, viterbi
 from ssm.util import ensure_args_are_lists, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, ssm_pbar
@@ -613,8 +614,8 @@ class SLDS(object):
                                                     h_dyn_2=h_dyn_2,
                                                     h_obs=h_obs))
             elif type(variational_posterior) is varinf.SLDSStructuredMeanFieldBandedVariationalPosterior:
-                J_banded = self._laplace_hessian_neg_expected_log_joint_banded(
-                    data, input, mask, tag, x, Ez, Ezzp1)
+                J_banded = blocks_to_bands2(self._laplace_hessian_neg_expected_log_joint_banded(
+                    data, input, mask, tag, x, Ez, Ezzp1))
                 h = symm_banded_times_vector(J_banded, np.ravel(x)).reshape((x.shape))
                 continuous_state_params.append(dict(J_banded=J_banded,h=h))
 

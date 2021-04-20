@@ -82,3 +82,12 @@ for n in range(N):
 plt.legend()
 plt.xlabel("time")
 plt.xlim((0,T))
+
+
+
+# lds2 = SLDS(N, K, D, M=M, emissions="gaussian", F_zero_flag=True)
+# lds2.emissions.Fs[0] = 0.0 * true_lds.emissions.Fs[0]
+# lds2.initialize(y, inputs=us)
+# kwargs = {}
+# q_lem_elbos2, q_lem2 = lds2.fit(y, inputs=us, method="laplace_em", variational_posterior="structured_meanfield",
+#                              num_iters=20, initialize=False, continuous_optimizer='newton')  #lbfgs newton

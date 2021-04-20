@@ -7,7 +7,7 @@ from ssm.messages import hmm_expected_states, hmm_sample, kalman_info_sample, ka
 from ssm.util import ensure_variational_args_are_lists, trace_product
 
 from autograd.scipy.special import logsumexp
-from autograd.scipy.linalg import solveh_banded
+from autograd.scipy.linalg import solveh_banded, cholesky_banded
 from warnings import warn
 from tqdm import tqdm
 
@@ -676,8 +676,14 @@ class SLDSStructuredMeanFieldBandedVariationalPosterior(VariationalPosterior):
 
     #TODO
     def _continuous_entropy(self):
-        negentropy = 0
-        return -negentropy
+        entropy = 0.0
+        for prms in self.continuous_state_params:
+            T, D = prms["h"].shape
+            L = cholesky_banded(prms["J_banded"], lower=True)
+            L_diag = L[0]
+            entropy += np.sum(np.log(L_diag))
+            entropy += 0.5 * T * D * np.log(2.0 * np.pi * np.exp(1.0))
+        return entropy
 
     def entropy(self):
         """

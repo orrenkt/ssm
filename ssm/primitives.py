@@ -428,6 +428,8 @@ def symm_banded_times_vector(J_banded, x):
 def banded_log_probability(x, J_banded, h):
 
     T, D = x.shape
+    B = J_banded.shape[0]
+    Lags = int(B / D) - 1
     assert h.shape == (T, D)
 
     # -1/2 x^T J x
@@ -441,7 +443,7 @@ def banded_log_probability(x, J_banded, h):
     #                   = -1/2 (L^{-1}h)^T (L^{-1} h)
     # L = cholesky_block_tridiag(J_diag, J_lower_diag, lower=True)
     L = cholesky_banded(J_banded, lower=True)
-    Linv_h = solve_banded((2*D-1, 0), L, h.ravel())
+    Linv_h = solve_banded(((Lags+1)*D-1, 0), L, h.ravel())
     ll -= 1/2 * np.sum(Linv_h * Linv_h)
 
     # 1/2 log |J| -TD/2 log(2 pi) = log |L| -TD/2 log(2 pi)
@@ -525,11 +527,15 @@ def block_tridiagonal_sample(J_diag, J_lower_diag, h, z=None):
     return samples + mu
 
 
-def lds_banded_sample(J_banded, h, T, D, Lags, z=None):
+def lds_banded_sample(J_banded, h, z=None):
     """
     Sample a Gaussian chain graph represented by a block
     tridiagonal precision matrix and a linear potential.
     """
+    T, D = h.shape
+    B = J_banded.shape[0]
+    Lags = int(B / D) - 1
+
     # Convert blocks to banded form so we can capitalize on Lapack code
     L = cholesky_banded(J_banded, lower=True)
     U = transpose_banded(((Lags+1)*D-1, 0), L)

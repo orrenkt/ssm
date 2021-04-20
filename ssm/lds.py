@@ -9,7 +9,7 @@ from autograd import value_and_grad, grad
 from ssm.optimizers import adam_step, rmsprop_step, sgd_step, lbfgs, \
     convex_combination, newtons_method_block_tridiag_hessian, \
     newtons_method_banded_hessian
-from ssm.primitives import hmm_normalizer, blocks_to_bands2
+from ssm.primitives import hmm_normalizer, symm_banded_times_vector
 from ssm.messages import hmm_expected_states, viterbi
 from ssm.util import ensure_args_are_lists, \
     ensure_slds_args_not_none, ensure_variational_args_are_lists, ssm_pbar
@@ -596,59 +596,56 @@ class SLDS(object):
             # Evaluate the Hessian at the mode
             assert np.all(np.isfinite(_objective(x, -1)))
 
-            J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = self.\
-                _laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
-
-            #if type(self.dynamics) == obs.EmbeddedHigherOrderAutoRegressiveObservations:
-
-                # Construct embedded higher order x
-            #    raise ValueError('WIP!')
-                #x =
-
-            J_banded = self._laplace_hessian_neg_expected_log_joint_banded(
-                data, input, mask, tag, x, Ez, Ezzp1)
-            from ssm.primitives import symm_banded_times_vector
-            h = symm_banded_times_vector(J_banded, np.ravel(x)).reshape((x.shape))
+            # update parameters
+            if type(variational_posterior) is varinf.SLDSStructuredMeanFieldVariationalPosterior:
+                J_ini, J_dyn_11, J_dyn_21, J_dyn_22, J_obs = self.\
+                    _laplace_neg_hessian_params(data, input, mask, tag, x, Ez, Ezzp1)
+                h_ini, h_dyn_1, h_dyn_2, h_obs = \
+                    self._laplace_neg_hessian_params_to_hs(x, J_ini, J_dyn_11,
+                                                J_dyn_21, J_dyn_22, J_obs)
+                continuous_state_params.append(dict(J_ini=J_ini,
+                                                    J_dyn_11=J_dyn_11,
+                                                    J_dyn_21=J_dyn_21,
+                                                    J_dyn_22=J_dyn_22,
+                                                    J_obs=J_obs,
+                                                    h_ini=h_ini,
+                                                    h_dyn_1=h_dyn_1,
+                                                    h_dyn_2=h_dyn_2,
+                                                    h_obs=h_obs))
+            elif type(variational_posterior) is varinf.SLDSStructuredMeanFieldBandedVariationalPosterior:
+                J_banded = self._laplace_hessian_neg_expected_log_joint_banded(
+                    data, input, mask, tag, x, Ez, Ezzp1)
+                h = symm_banded_times_vector(J_banded, np.ravel(x)).reshape((x.shape))
+                continuous_state_params.append(dict(J_banded=J_banded,h=h))
 
             # debugging code for sampling from banded hessian
-            from ssm.primitives import lds_banded_sample
-            samples = []
-            for i in range(100):
-                samp = lds_banded_sample(J_banded, h, data.shape[0], self.D, self.dynamics.lags)
-                samples.append(samp)
-            samp_a = np.array(samples)
-            samp_mean = np.mean(samp_a, axis=0)
-            import matplotlib.pyplot as plt 
-            plt.figure()
-            plt.plot(x, 'k')
-            plt.plot(samp_mean,'b')
-            for i in range(100):
-                plt.plot(samples[i], 'b', linewidth=0.5, alpha=0.5)
-            plt.show()
-            # build hessian
-            T = data.shape[0]
-            full_hessian = np.diag(J_banded[0])
-            for i in range(1, J_banded.shape[0]):
-                full_hessian += np.diag(J_banded[i][:-i], i)
-                full_hessian += np.diag(J_banded[i][:-i], -i)
+            # from ssm.primitives import lds_banded_sample
+            # samples = []
+            # for i in range(100):
+            #     samp = lds_banded_sample(J_banded, h)
+            #     samples.append(samp)
+            # samp_a = np.array(samples)
+            # samp_mean = np.mean(samp_a, axis=0)
+            # import matplotlib.pyplot as plt
+            # plt.figure()
+            # plt.plot(x, 'k')
+            # plt.plot(samp_mean,'b')
+            # for i in range(100):
+            #     plt.plot(samples[i], 'b', linewidth=0.5, alpha=0.5)
+            # plt.show()
+            # # build hessian
+            # T = data.shape[0]
+            # full_hessian = np.diag(J_banded[0])
+            # for i in range(1, J_banded.shape[0]):
+            #     full_hessian += np.diag(J_banded[i][:-i], i)
+            #     full_hessian += np.diag(J_banded[i][:-i], -i)
 
-            # test symmetric banded matrix times vector
-            out1 = full_hessian @ np.ravel(x)
-            out2 = symm_banded_times_vector(J_banded, np.ravel(x))
-            from ssm.primitives import banded_log_probability
-            ll = banded_log_probability(x, J_banded, h)
-            import ipdb; ipdb.set_trace()
-
-            # samp = block_tridiagonal_sample(hessian_diag, hessian_lower_diag, h_out)
-            continuous_state_params.append(dict(J_ini=J_ini,
-                                                J_dyn_11=J_dyn_11,
-                                                J_dyn_21=J_dyn_21,
-                                                J_dyn_22=J_dyn_22,
-                                                J_obs=J_obs,
-                                                h_ini=h_ini,
-                                                h_dyn_1=h_dyn_1,
-                                                h_dyn_2=h_dyn_2,
-                                                h_obs=h_obs))
+            # # test symmetric banded matrix times vector
+            # out1 = full_hessian @ np.ravel(x)
+            # out2 = symm_banded_times_vector(J_banded, np.ravel(x))
+            # from ssm.primitives import banded_log_probability
+            # ll = banded_log_probability(x, J_banded, h)
+            # import ipdb; ipdb.set_trace()
 
         # Update the variational posterior params
         variational_posterior.continuous_state_params = continuous_state_params
@@ -800,7 +797,8 @@ class SLDS(object):
                 mf=varinf.SLDSMeanFieldVariationalPosterior,
                 lds=varinf.SLDSTriDiagVariationalPosterior,
                 tridiag=varinf.SLDSTriDiagVariationalPosterior,
-                structured_meanfield=varinf.SLDSStructuredMeanFieldVariationalPosterior
+                structured_meanfield=varinf.SLDSStructuredMeanFieldVariationalPosterior,
+                structured_meanfield_banded=varinf.SLDSStructuredMeanFieldBandedVariationalPosterior
                 )
 
             if variational_posterior not in _var_posteriors:
@@ -821,8 +819,9 @@ class SLDS(object):
             "BBVI only supports 'meanfield' or 'lds' posteriors."
 
         elif method in ["laplace_em"]:
-            assert isinstance(posterior, varinf.SLDSStructuredMeanFieldVariationalPosterior),\
-            "Laplace EM only supports 'structured' posterior."
+            assert isinstance(posterior,
+                (varinf.SLDSStructuredMeanFieldVariationalPosterior, varinf.SLDSStructuredMeanFieldBandedVariationalPosterior)),\
+            "Laplace EM only supports 'structured' posteriors."
 
         return posterior
 

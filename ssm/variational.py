@@ -1,12 +1,13 @@
 import autograd.numpy as np
 import autograd.numpy.random as npr
 
-from ssm.primitives import lds_log_probability, lds_sample, lds_mean
+from ssm.primitives import lds_log_probability, lds_sample, lds_mean, lds_banded_sample
 from ssm.messages import hmm_expected_states, hmm_sample, kalman_info_sample, kalman_info_smoother
 
 from ssm.util import ensure_variational_args_are_lists, trace_product
 
 from autograd.scipy.special import logsumexp
+from autograd.scipy.linalg import solveh_banded
 from warnings import warn
 from tqdm import tqdm
 
@@ -460,6 +461,222 @@ class SLDSStructuredMeanFieldVariationalPosterior(VariationalPosterior):
 
             # Log normalizer
             negentropy -= log_Z
+        return -negentropy
+
+    def entropy(self):
+        """
+        Compute the entropy of the variational posterior distirbution.
+
+        Recall that under the structured mean field approximation
+
+        H[q(z)q(x)] = -E_{q(z)q(x)}[log q(z) + log q(x)] = -E_q(z)[log q(z)] -
+                    E_q(x)[log q(x)] = H[q(z)] + H[q(x)].
+
+        That is, the entropy separates into the sum of entropies for the
+        discrete and continuous states.
+
+        For each one, we have
+
+        E_q(u)[log q(u)] = E_q(u) [log q(u_1) + sum_t log q(u_t | u_{t-1}) + loq
+                         q(u_t) - log Z] = E_q(u_1)[log q(u_1)] + sum_t
+                         E_{q(u_t, u_{t-1}[log q(u_t | u_{t-1})] + E_q(u_t)[loq
+                         q(u_t)] - log Z
+
+        where u \in {z, x} and log Z is the log normalizer.  This shows that we
+        just need the posterior expectations and potentials, and the log
+        normalizer of the distribution.
+
+        """
+        continuous_entropy = self._continuous_entropy()
+        discrete_entropy = self._discrete_entropy()
+        return discrete_entropy + continuous_entropy
+
+class SLDSStructuredMeanFieldBandedVariationalPosterior(VariationalPosterior):
+    """
+    p(z, x | y) \approx q(z) q(x).
+
+
+    Assume q(z) is a chain-structured discrete graphical model,
+
+        q(z) = exp{log_pi0[z_1] +
+                   \sum_{t=2}^T log_Ps[z_{t-1}, z_t] +
+                   \sum_{t=1}^T log_likes[z_t]
+
+    parameterized by pi0, Ps, and log_likes.
+
+    Assume q(x) is and that we update q(x) via Laplace approximation. 
+    Specifically,
+
+        q(x) = N(J, h)
+
+    where J is a banded precision matrix and h is the linear potential.
+    The mapping to mean parameters is mu = J^{-1} h and Sigma = J^{-1}.
+    """
+    @ensure_variational_args_are_lists
+    def __init__(self, model, datas,
+                 inputs=None, masks=None, tags=None,
+                 initial_variance=0.01, smc=False):
+
+        super(SLDSStructuredMeanFieldBandedVariationalPosterior, self).\
+            __init__(model, datas, masks, tags)
+
+        # Initialize the parameters
+        self.D = model.D
+        self.K = model.K
+        self.num_lags = model.dynamics.lags
+        self.Ts = [data.shape[0] for data in datas]
+        self.initial_variance = initial_variance
+
+        self._discrete_state_params = None
+        self._discrete_expectations = None
+        self.discrete_state_params = \
+            [self._initialize_discrete_state_params(data, input, mask, tag)
+             for data, input, mask, tag in zip(datas, inputs, masks, tags)]
+
+        self._continuous_state_params = None
+        self._continuous_expectations = None
+        self.continuous_state_params = \
+            [self._initialize_continuous_state_params(data, input, mask, tag, smc=smc)
+             for data, input, mask, tag in tqdm(zip(datas, inputs, masks, tags))]
+
+    # Parameters
+    @property
+    def params(self):
+        return self.discrete_state_params, self.continuous_state_params
+
+    @property
+    def discrete_state_params(self):
+        return self._discrete_state_params
+
+    @discrete_state_params.setter
+    def discrete_state_params(self, value):
+        assert isinstance(value, list) and len(value) == len(self.datas)
+        for prms in value:
+            for key in ["pi0", "Ps", "log_likes"]:
+                assert key in prms
+        self._discrete_state_params = value
+
+        # Rerun the HMM smoother with the updated parameters
+        self._discrete_expectations = \
+            [hmm_expected_states(prms["pi0"], prms["Ps"], prms["log_likes"])
+             for prms in self._discrete_state_params]
+
+    @property
+    def continuous_state_params(self):
+        return self._continuous_state_params
+
+    @continuous_state_params.setter
+    def continuous_state_params(self, value):
+        assert isinstance(value, list) and len(value) == len(self.datas)
+        for prms in value:
+            for key in ["J_banded", "h"]:
+                assert key in prms
+        self._continuous_state_params = value
+
+        # Rerun the Kalman smoother with the updated parameters
+        # self._continuous_expectations = \
+        #     [kalman_info_smoother(prms["J_ini"], prms["h_ini"], 0,
+        #                           prms["J_dyn_11"], prms["J_dyn_21"], prms["J_dyn_22"],
+        #                           prms["h_dyn_1"], prms["h_dyn_2"], 0,
+        #                           prms["J_obs"], prms["h_obs"], 0)
+        #      for prms in self._continuous_state_params]
+        self._continuous_expectations = \
+            [np.reshape(solveh_banded(prms["J_banded"], np.ravel(prms["h"]), lower=True), 
+                        prms["h"].shape)
+             for prms in self._continuous_state_params]
+
+    def _initialize_discrete_state_params(self, data, input, mask, tag):
+        T = data.shape[0]
+        K = self.K
+
+        # Initialize q(z) parameters: pi0, log_likes, transition_matrices
+        pi0 = np.ones(K) / K
+        Ps = np.ones((T-1, K, K)) / K
+        log_likes = np.zeros((T, K))
+        return dict(pi0=pi0, Ps=Ps, log_likes=log_likes)
+
+    def _initialize_continuous_state_params(self, data, input, mask, tag, smc=False):
+        T = data.shape[0]
+        D = self.D
+
+        # Initialize the linear terms
+        h = np.zeros((T, D))
+
+        # Set the posterior mean based on the emission model, if possible.
+        if self.model.emissions.single_subspace and self.model.emissions.N >= D:
+
+            if smc:
+                # run particle filter
+                particles, weights = self.model.smc(data, input, mask, tag, N_particles=25)
+                h_obs = (1.0 / self.initial_variance) * np.mean(particles[0,:,:,:],axis=0)
+            else:
+                h_obs = (1.0 / self.initial_variance) * self.model.emissions. \
+                    invert(data, input=input, mask=mask, tag=tag)
+
+        else:
+            warn("We can only initialize the continuous states if the emissions lie in a "
+                 "single subspace and are of higher dimension than the latent states."
+                 "Defaulting to a random initialization instead.")
+        h += h_obs
+
+        # Initialize the posterior variance to self.initial_variance * I
+        J_banded = np.zeros(( (self.num_lags+1) * D, T*D))
+        J_banded[0] = 1.0 / self.initial_variance * np.ones(T*D)
+        return dict(J_banded=J_banded, h=h)
+
+    # Posterior expectations
+    @property
+    def discrete_expectations(self):
+        return self._discrete_expectations
+
+    @property
+    def continuous_expectations(self):
+        return self._continuous_expectations
+
+    @property
+    def mean_discrete_states(self):
+        full_expectations = self.discrete_expectations
+        return [exp[0] for exp in full_expectations]
+
+    @property
+    def mean_continuous_states(self):
+        return self.continuous_expectations
+
+    @property
+    def mean(self):
+        return list(zip(self.discrete_expectations, self.mean_continuous_states))
+
+    # Sample
+    def sample_discrete_states(self):
+        return [hmm_sample(prms["pi0"], prms["Ps"], prms["log_likes"])
+                for prms in self._discrete_state_params]
+
+    #TODO
+    def sample_continuous_states(self):
+        return [lds_banded_sample(prms["J_banded"], prms["h"])
+                for prms in self._continuous_state_params]
+
+    def sample(self):
+        return list(zip(self.sample_discrete_states(), self.sample_continuous_states()))
+
+    # Entropy
+    def _discrete_entropy(self):
+        negentropy = 0
+        discrete_expectations = self.discrete_expectations
+        for prms, (Ez, Ezzp1, normalizer) in \
+                zip(self.discrete_state_params, discrete_expectations):
+
+            log_pi0 = np.log(prms["pi0"] + 1e-16) - logsumexp(prms["pi0"])
+            log_Ps = np.log(prms["Ps"] + 1e-16) - logsumexp(prms["Ps"], axis=1, keepdims=True)
+            negentropy -= normalizer  # -log Z
+            negentropy += np.sum(Ez[0] * log_pi0)  # initial factor
+            negentropy += np.sum(Ez * prms["log_likes"])  # unitary factors
+            negentropy += np.sum(Ezzp1 * log_Ps)  # pairwise factors
+        return -negentropy
+
+    #TODO
+    def _continuous_entropy(self):
+        negentropy = 0
         return -negentropy
 
     def entropy(self):

@@ -524,6 +524,30 @@ class SLDS(object):
 
         return blocks_to_bands2(hessian_blocks) / scale
 
+    def _laplace_hessian_neg_expected_log_joint_banded2(self, data, input, mask, tag, x, Ez, Ezzp1,
+                                                       scale=1, return_blocks=False):
+
+        T, D = np.shape(x)
+        x_mask = np.ones((T, D), dtype=bool)
+
+        # Start with dynamics
+        hessian_diag, hessian_off_diag = \
+            self.dynamics.neg_hessian_expected_log_dynamics_prob_banded2(Ez, x, input, x_mask, tag)
+        # Add discrete latent and emissions contributions
+        J_transitions = self.transitions.\
+            neg_hessian_expected_log_trans_prob(x, input, x_mask, tag, Ezzp1)
+        J_obs = self.emissions.\
+            neg_hessian_log_emissions_prob(data, input, mask, tag, x, Ez)
+        hessian_diag[:-1] += J_transitions
+        hessian_diag += J_obs
+        hessian_blocks = [hessian_diag,] + hessian_off_diag
+
+        # Return scaled negative hessian
+        if return_blocks:
+            return hessian_blocks / scale
+
+        return blocks_to_bands2(hessian_blocks) / scale
+
     def _laplace_neg_hessian_params_to_hs(self,
                                           x,
                                           J_ini,

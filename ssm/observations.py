@@ -1226,15 +1226,31 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
         As_ = [[A0] + [A[:,j*self.D:(j+1)*self.D] for j in range(self.lags)]
                for A in self.As]
         # Formula for hessian band elements. offdiag_elements is lags x K x D x D
-        Hj = lambda j: [np.sum([A_[i-j].T @ inv_Sigma @ A_[i]
-                                for i in range(j, self.lags+1)], axis=0)
-                        for A_, inv_Sigma in zip(As_, inv_Sigmas)]
-        offdiag_elements = np.array([Hj(j) for j in range(1, self.lags+1)])
+        # Hj = lambda j: [np.sum([A_[i-j].T @ inv_Sigma @ A_[i]
+        #                         for i in range(j, self.lags+1)], axis=0)
+        #                 for A_, inv_Sigma in zip(As_, inv_Sigmas)]
+        # offdiag_elements = np.array([Hj(j) for j in range(1, self.lags+1)])
 
         # Marginalize over discrete state (broadcast over time). offdiag is lags x T x D x D
-        offdiag = [np.sum(Ez[1:,:,None,None] * band_elements[None,:,:,:], axis=1)
-                           for i, band_elements in enumerate(offdiag_elements)]
+        # offdiag = [np.sum(Ez[1:,:,None,None] * band_elements[None,:,:,:], axis=1)
+        #                    for i, band_elements in enumerate(offdiag_elements)]
 
+        # Off Diag Blocks
+        offdiag = []
+        for i in range(1, self.lags+1):
+            offdiag_j = np.zeros((T-i, D, D))
+            dynamics_terms = np.array([
+                [A_[j-i].T @ inv_Sigma @ A_[j]
+                for A_, inv_Sigma in zip(As_, inv_Sigmas)]
+                for j in range(i, self.lags+1)])
+            for j, dynamics_term in enumerate(dynamics_terms):
+                if j == 0:
+                    offdiag_j[self.lags-i-j:T-i-j] += -1.0 * \
+                        np.sum(Ez[self.lags:,:,None,None] * dynamics_term[None,:], axis=1) 
+                else:
+                    offdiag_j[self.lags-i-j:T-i-j] += \
+                        np.sum(Ez[self.lags:,:,None,None] * dynamics_term[None,:], axis=1) 
+            offdiag.append(offdiag_j)
         return diag, offdiag
 
 

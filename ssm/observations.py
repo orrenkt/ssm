@@ -1183,9 +1183,11 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
 
         for j in range(self.lags+1):
             for i, dynamics_term in enumerate(Hj(j,self.lags)):
-                end = -i-j if i+j > 0 else None
-                hessian_blocks[j, self.lags-i-j:end] += np.sum(Ez[self.lags:,:,None,None] * \
-                                                               dynamics_term[None,:], axis=1)
+                l = 1.0
+                if i == 0 and j > 0:
+                    l = -1.0
+                hessian_blocks[j, self.lags-i-j:T-i-j] += l * np.sum(Ez[self.lags:,:,None,None] * \
+                                                                     dynamics_term[None,:], axis=1)
         return hessian_blocks
 
     def neg_hessian_expected_log_dynamics_prob_banded2(self, Ez, data, input, mask, tag=None):
@@ -1246,10 +1248,10 @@ class EmbeddedHigherOrderAutoRegressiveObservations(AutoRegressiveObservations):
             for j, dynamics_term in enumerate(dynamics_terms):
                 if j == 0:
                     offdiag_j[self.lags-i-j:T-i-j] += -1.0 * \
-                        np.sum(Ez[self.lags:,:,None,None] * dynamics_term[None,:], axis=1) 
+                        np.sum(Ez[self.lags:,:,None,None] * dynamics_term[None,:], axis=1)
                 else:
                     offdiag_j[self.lags-i-j:T-i-j] += \
-                        np.sum(Ez[self.lags:,:,None,None] * dynamics_term[None,:], axis=1) 
+                        np.sum(Ez[self.lags:,:,None,None] * dynamics_term[None,:], axis=1)
             offdiag.append(offdiag_j)
         return diag, offdiag
 

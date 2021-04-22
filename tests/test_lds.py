@@ -696,6 +696,7 @@ def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=3):
     #slds.initialize()
     print('As')
     print(slds.dynamics.As)
+    print("")
 
     slds.emissions.Fs[0] *= 0
     z, x, y = slds.sample(T)
@@ -759,8 +760,31 @@ def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=3):
     print('|true-banded|', np.linalg.norm(true_hess_banded-hessian_banded))
     print('|true-banded2|', np.linalg.norm(true_hess_banded-hessian_banded2))
 
-    #print(true_hess_banded-hessian_banded)
-    #print(true_hess_banded-hessian_banded2)
+    print(true_hess_banded-hessian_banded)
+    print("")
+    print(true_hess_banded-hessian_banded2)
+
+    hessian_blocks = new_slds._laplace_hessian_neg_expected_log_joint_banded(datas[0],
+                                                                             inputs[0],
+                                                                             masks[0],
+                                                                             tags[0],
+                                                                             x, Ez, Ezzp1,
+                                                                             return_blocks=True)
+    print(hessian_blocks.shape)
+
+    # Need to reassmble Hessian from its bands. Start with diag and add offdiag bands
+    dense_hessian = scipy.linalg.block_diag(*[x for x in hessian_blocks[0,:]])
+    for j in range(1, lags+1):
+        dense_hessian[j*D:, :-D*j] += scipy.linalg.block_diag(*[x for x in hessian_blocks[j,:-j,:]])
+        dense_hessian[:-j*D, D*j:] += scipy.linalg.block_diag(*[x for x in hessian_blocks[j,:-j,:]])
+
+    print("")
+    print(true_hess[:20,:10] - dense_hessian[:20,:10])
+
+    print("")
+    #print(true_hess[:8,:7])
+
+
 
     # print(true_hess.shape, dense_hessian.shape)
     import ipdb

@@ -781,9 +781,16 @@ def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=2):
     print(hessian_banded2[0])
     print(np.diag(true_hess))
 
+    dense_hessian = np.diag(hessian_banded2[0])
+    for i in range(1, hessian_banded2.shape[0]):
+        band = hessian_banded2[i][:-i]
+        dense_hessian += np.diag(band, -i)
+        dense_hessian += np.diag(band, i)
+
     # print(true_hess.shape, dense_hessian.shape)
     import ipdb
     ipdb.set_trace()
+    print("")
     assert np.allclose(true_hess, dense_hessian)
     print("Hessian passed.")
 

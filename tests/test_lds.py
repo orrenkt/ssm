@@ -683,10 +683,12 @@ def test_laplace_em_hessian(N=5, K=3, D=2, T=20):
             assert np.allclose(h, h_dense)
 
 
-def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=2):
+def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=3):
+
     np.random.seed(0)
-    np.set_printoptions(precision=3, suppress=True)
+    np.set_printoptions(precision=2, suppress=True)
     print("Checking analytical hessian.")
+
     slds = ssm.SLDS(N, K, D, dynamics="higher_order", emissions="gaussian",
                     dynamics_kwargs={'lags':lags})
     log_Ps = np.log(np.array([[0.75, 0.25], [0.25, 0.75]]))
@@ -694,6 +696,7 @@ def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=2):
     #slds.initialize()
     print('As')
     print(slds.dynamics.As)
+
     slds.emissions.Fs[0] *= 0
     z, x, y = slds.sample(T)
     new_slds = ssm.SLDS(N, K, D, F_zero_flag=True, dynamics="higher_order",
@@ -726,10 +729,6 @@ def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=2):
     x = variational_posterior.mean_continuous_states[0]
     scale = x.size
 
-    #dense_hessian = scipy.linalg.block_diag(*[x for x in J_diag])
-    #dense_hessian[D:, :-D] += scipy.linalg.block_diag(*[x for x in J_lower_diag])
-    #dense_hessian[:-D, D:] += scipy.linalg.block_diag(*[x.T for x in J_lower_diag])
-
     hessian_banded = new_slds._laplace_hessian_neg_expected_log_joint_banded(datas[0],
                                                                              inputs[0],
                                                                              masks[0],
@@ -742,34 +741,32 @@ def test_laplace_em_ar_banded_hessian(N=5, K=2, D=2, T=20, lags=2):
                                                                              tags[0],
                                                                              x, Ez, Ezzp1,
                                                                              return_blocks=False)
-    print('hess bands')
-    print(hessian_banded[:,:5])
-
-    print("")
 
     # Eval hessian with autodiff
     true_hess = hessian(neg_expected_log_joint_banded_wrapper)(x.reshape(-1), T, D)
-    true_hess_bands = np.zeros((6,5))
+    true_hess_banded = np.zeros((8,40))
+    for i in range(8):
+        end = -i if i > 0 else None
+        true_hess_banded[i,:end] = np.diag(true_hess,i)
 
+    for i in range(8):
+        print(i)
+        print('banded2', hessian_banded2[i,:10])
+        print('banded ', hessian_banded[i,:10])
+        print('true   ', true_hess_banded[i,:10])
+        print("")
 
-    for i in range(6):
-        true_hess_bands[i,:] = np.diag(true_hess, -i)[:5]
-    print('true hess bands')
-    print(true_hess_bands)
-    print("")
-    print('true')
-    print(true_hess[:12,:4])
-    print("")
-    # print('dense')
-    # print(dense_hessian[:12,:4])
+    print('|true-banded|', np.linalg.norm(true_hess_banded-hessian_banded))
+    print('|true-banded2|', np.linalg.norm(true_hess_banded-hessian_banded2))
 
-    print(hessian_banded2[0])
-    print(np.diag(true_hess))
+    #print(true_hess_banded-hessian_banded)
+    #print(true_hess_banded-hessian_banded2)
 
     # print(true_hess.shape, dense_hessian.shape)
     import ipdb
     ipdb.set_trace()
-    assert np.allclose(true_hess, dense_hessian)
+    assert np.allclose(true_hess_banded, hessian_banded)
+    assert np.allclose(true_hess_banded, hessian_banded2)
     print("Hessian passed.")
 
     # Check if diagonal band alone is correct?
